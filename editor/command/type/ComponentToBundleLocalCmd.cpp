@@ -41,9 +41,7 @@ void editor::ComponentToBundleLocalCmd::undo() {
             EntityBundle* bundle = project->getEntityBundle(filepath);
 
             bundle->clearComponentOverride(sceneProject->id, entity, componentType);
-
-            Entity registryEntity = bundle->getRegistryEntity(sceneId, entity);
-            Catalog::copyComponent(bundle->registry.get(), registryEntity, sceneProject->scene, entity, componentType);
+            Project::reloadInstanceComponentFromBundle(bundle, sceneId, sceneProject->scene, entity, componentType);
         }
     }
 

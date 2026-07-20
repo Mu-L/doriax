@@ -34,9 +34,7 @@ bool editor::ComponentToBundleSharedCmd::execute() {
 
             // Clear the override and copy values from the bundle registry
             bundle->clearComponentOverride(sceneProject->id, entityData.entity, componentType);
-
-            Entity registryEntity = bundle->getRegistryEntity(sceneId, entityData.entity);
-            Catalog::copyComponent(bundle->registry.get(), registryEntity, sceneProject->scene, entityData.entity, componentType);
+            Project::reloadInstanceComponentFromBundle(bundle, sceneId, sceneProject->scene, entityData.entity, componentType);
         }
 
     }

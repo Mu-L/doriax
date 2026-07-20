@@ -1840,11 +1840,30 @@ void editor::Stream::decodeSceneProject(SceneProject* sceneProject, const YAML::
 void editor::Stream::decodeSceneProjectEntities(Project* project, SceneProject* sceneProject, const YAML::Node& node){
     sceneProject->entities.clear();
     sceneProject->selectedEntities.clear();
+    sceneProject->pendingBundleLocalRefs.clear();
 
     auto entitiesNode = node["entities"];
+    // Keep bundle-created members from consuming IDs belonging to scene entities
+    // that appear later in the file. Scene/local entity decoders reuse these
+    // empty reservations; bundle registries still allocate around them.
+    auto reserveEntityIds = [&](auto&& self, const YAML::Node& entityNode) -> void {
+        if (!entityNode || !entityNode.IsMap()) return;
+        if (entityNode["entity"]) {
+            sceneProject->scene->recreateEntity(entityNode["entity"].as<Entity>());
+        }
+        for (const char* key : {"members", "children", "bundleLocalEntities"}) {
+            if (entityNode[key] && entityNode[key].IsSequence()) {
+                for (const auto& child : entityNode[key]) self(self, child);
+            }
+        }
+    };
+    for (const auto& entityNode : entitiesNode) reserveEntityIds(reserveEntityIds, entityNode);
+
     for (const auto& entityNode : entitiesNode){
-        decodeEntity(entityNode, sceneProject->scene, &sceneProject->entities, project, sceneProject);
+        decodeEntity(entityNode, sceneProject->scene, &sceneProject->entities, project, sceneProject, NULL_ENTITY, false);
     }
+
+    project->resolvePendingBundleLocalRefs(sceneProject, true);
 
     CameraTextureLink::resolve(sceneProject->scene);
 }
@@ -2158,191 +2177,121 @@ YAML::Node editor::Stream::encodeEntityAux(const Entity entity, const EntityRegi
                     entityNode["components"] = components;
                 }
 
-                // Encode bundle overrides and local entities
-                auto sceneIt = bundle->instances.find(sceneProject->id);
-                if (sceneIt != bundle->instances.end()) {
-                    for (const auto& instance : sceneIt->second) {
-                        if (instance.rootEntity != entity) continue;
+                YAML::Node overridesNode;
+                YAML::Node localEntsNode;
+                YAML::Node localPropsNode;
 
-                        // Encode component overrides keyed by registryEntity
-                        YAML::Node overridesNode;
-                        for (const auto& member : instance.members) {
-                            auto overrideIt = instance.overrides.find(member.localEntity);
-                            if (overrideIt != instance.overrides.end() && overrideIt->second != 0) {
-                                YAML::Node entry;
-                                entry["registryEntity"] = member.registryEntity;
-                                Signature sig = Catalog::componentMaskToSignature(registry, overrideIt->second);
-                                YAML::Node overrideComps = encodeComponents(member.localEntity, registry, sig);
-                                if (overrideComps.IsMap() && overrideComps.size() > 0) {
-                                    entry["components"] = overrideComps;
-                                }
-                                overridesNode.push_back(entry);
-                            }
-                        }
+                // Walk every instance below this top-level root. Registry paths
+                // make the same compact schema work at any nesting depth.
+                for (const auto& [localBundlePath, localBundle] : project->getEntityBundles(sceneProject->id)) {
+                    (void)localBundlePath;
+                    auto localSceneIt = localBundle->instances.find(sceneProject->id);
+                    if (localSceneIt == localBundle->instances.end()) continue;
 
-                        // Encode nested bundle overrides (tagged with bundlePath)
-                        for (const auto& member : instance.members) {
-                            if (!registry->getSignature(member.localEntity).test(registry->getComponentId<BundleComponent>())) continue;
-                            const BundleComponent& nestedBC = registry->getComponent<BundleComponent>(member.localEntity);
-                            if (nestedBC.path.empty()) continue;
+                    std::unordered_map<Entity, size_t> lastInstanceForRoot;
+                    for (size_t i = 0; i < localSceneIt->second.size(); ++i) {
+                        lastInstanceForRoot[localSceneIt->second[i].rootEntity] = i;
+                    }
 
-                            const EntityBundle* nestedBundle = project->getEntityBundle(nestedBC.path);
-                            if (!nestedBundle) continue;
+                    for (size_t instanceIndex = 0; instanceIndex < localSceneIt->second.size(); ++instanceIndex) {
+                        const auto& localInstance = localSceneIt->second[instanceIndex];
+                        if (lastInstanceForRoot[localInstance.rootEntity] != instanceIndex) continue;
 
-                            auto nestedSceneIt = nestedBundle->instances.find(sceneProject->id);
-                            if (nestedSceneIt == nestedBundle->instances.end()) continue;
-
-                            for (const auto& nestedInst : nestedSceneIt->second) {
-                                if (nestedInst.rootEntity != member.localEntity) continue;
-
-                                for (const auto& nestedMember : nestedInst.members) {
-                                    auto nOverrideIt = nestedInst.overrides.find(nestedMember.localEntity);
-                                    if (nOverrideIt != nestedInst.overrides.end() && nOverrideIt->second != 0) {
-                                        YAML::Node entry;
-                                        entry["registryEntity"] = nestedMember.registryEntity;
-                                        entry["bundlePath"] = nestedBC.path;
-                                        entry["bundleRootRegistryEntity"] = member.registryEntity;
-                                        Signature sig = Catalog::componentMaskToSignature(registry, nOverrideIt->second);
-                                        YAML::Node overrideComps = encodeComponents(nestedMember.localEntity, registry, sig);
-                                        if (overrideComps.IsMap() && overrideComps.size() > 0) {
-                                            entry["components"] = overrideComps;
-                                        }
-                                        overridesNode.push_back(entry);
-                                    }
-                                }
-                                break;
-                            }
-                        }
-
-                        if (overridesNode.size() > 0) {
-                            entityNode["bundleOverrides"] = overridesNode;
-                        }
-
-                        // Encode scene-specific local entities (children of bundle members/root not in members list)
-                        YAML::Node localEntsNode;
-                        std::unordered_set<Entity> memberSet;
-                        memberSet.insert(instance.rootEntity);
-                        for (const auto& m : instance.members) {
-                            memberSet.insert(m.localEntity);
-
-                            // Also add nested bundle members to memberSet
-                            if (registry->getSignature(m.localEntity).test(registry->getComponentId<BundleComponent>())) {
-                                const BundleComponent& nbc = registry->getComponent<BundleComponent>(m.localEntity);
-                                if (!nbc.path.empty()) {
-                                    const EntityBundle* nb = project->getEntityBundle(nbc.path);
-                                    if (nb) {
-                                        auto nsi = nb->instances.find(sceneProject->id);
-                                        if (nsi != nb->instances.end()) {
-                                            for (const auto& ni : nsi->second) {
-                                                if (ni.rootEntity == m.localEntity) {
-                                                    for (const auto& nm : ni.members) {
-                                                        memberSet.insert(nm.localEntity);
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Check root and each member for non-member children
-                        // Skip nested bundle roots (their local entities are handled separately)
-                        std::vector<std::pair<Entity, Entity>> parentCandidates; // {parentLocal, parentRegistry}
-                        parentCandidates.push_back({instance.rootEntity, NULL_ENTITY});
-                        for (const auto& m : instance.members) {
-                            if (registry->getSignature(m.localEntity).test(registry->getComponentId<BundleComponent>())) {
+                        std::vector<Entity> bundleRootPath;
+                        if (localInstance.rootEntity != entity) {
+                            Entity topRoot = NULL_ENTITY;
+                            if (!project->getBundleMemberAddress(sceneProject->id, localInstance.rootEntity, topRoot, bundleRootPath)
+                                    || topRoot != entity) {
                                 continue;
                             }
-                            parentCandidates.push_back({m.localEntity, m.registryEntity});
                         }
 
-                        for (const auto& [parentLocal, parentReg] : parentCandidates) {
+                        std::unordered_set<Entity> memberSet{localInstance.rootEntity};
+                        for (const auto& member : localInstance.members) memberSet.insert(member.localEntity);
+
+                        for (const auto& member : localInstance.members) {
+                            auto overrideIt = localInstance.overrides.find(member.localEntity);
+                            if (overrideIt == localInstance.overrides.end() || overrideIt->second == 0) continue;
+
+                            Entity sourceRoot = NULL_ENTITY;
+                            std::vector<Entity> sourcePath;
+                            if (!project->getBundleMemberAddress(sceneProject->id, member.localEntity, sourceRoot, sourcePath)
+                                    || sourceRoot != entity) {
+                                continue;
+                            }
+
+                            YAML::Node entry;
+                            entry["registryEntity"] = member.registryEntity;
+                            entry["registryPath"] = sourcePath;
+                            Signature sig = Catalog::componentMaskToSignature(registry, overrideIt->second);
+                            YAML::Node overrideComps = encodeComponents(member.localEntity, registry, sig);
+                            if (overrideComps.IsMap() && overrideComps.size() > 0) entry["components"] = overrideComps;
+                            overridesNode.push_back(entry);
+                        }
+
+                        std::vector<std::pair<Entity, Entity>> parentCandidates{{localInstance.rootEntity, NULL_ENTITY}};
+                        for (const auto& member : localInstance.members) {
+                            if (!registry->getSignature(member.localEntity).test(registry->getComponentId<BundleComponent>())) {
+                                parentCandidates.push_back({member.localEntity, member.registryEntity});
+                            }
+                        }
+
+                        for (const auto& [parentLocal, parentRegistry] : parentCandidates) {
                             if (!registry->getSignature(parentLocal).test(registry->getComponentId<Transform>())) continue;
                             auto transforms = registry->getComponentArray<Transform>();
-                            size_t parentIdx = transforms->getIndex(parentLocal);
-                            size_t childPos = 0;
-                            for (size_t ti = parentIdx + 1; ti < transforms->size(); ti++) {
-                                Transform& t = transforms->getComponentFromIndex(ti);
-                                Entity childEnt = transforms->getEntity(ti);
-                                if (t.parent != parentLocal) {
-                                    if (t.parent == NULL_ENTITY) break;
-                                    // Skip deeper descendants
+                            size_t parentIndex = transforms->getIndex(parentLocal);
+                            size_t childIndex = 0;
+                            for (size_t i = parentIndex + 1; i < transforms->size(); ++i) {
+                                const Transform& transform = transforms->getComponentFromIndex(i);
+                                Entity childEntity = transforms->getEntity(i);
+                                if (transform.parent != parentLocal) {
+                                    if (transform.parent == NULL_ENTITY) break;
                                     continue;
                                 }
-                                if (memberSet.find(childEnt) == memberSet.end()) {
-                                    // This is a local entity
-                                    YAML::Node localEntNode = encodeEntity(childEnt, registry, project, sceneProject);
-                                    localEntNode["parentRegistryEntity"] = parentReg;
-                                    localEntNode["childIndex"] = childPos;
-                                    localEntsNode.push_back(localEntNode);
+                                if (!memberSet.count(childEntity)) {
+                                    YAML::Node localEntityNode = encodeEntity(childEntity, registry, project, sceneProject);
+                                    localEntityNode["parentRegistryEntity"] = parentRegistry;
+                                    localEntityNode["childIndex"] = childIndex;
+                                    if (!bundleRootPath.empty()) localEntityNode["bundleRootRegistryPath"] = bundleRootPath;
+                                    localEntsNode.push_back(localEntityNode);
                                 }
-                                childPos++;
+                                ++childIndex;
                             }
                         }
 
-                        // Encode nested bundle local entities (tagged with bundlePath)
-                        for (const auto& member : instance.members) {
-                            if (!registry->getSignature(member.localEntity).test(registry->getComponentId<BundleComponent>())) continue;
-                            const BundleComponent& nestedBCLoc = registry->getComponent<BundleComponent>(member.localEntity);
-                            if (nestedBCLoc.path.empty()) continue;
+                        for (const auto& ref : Project::collectBundleLocalRefs(registry, localInstance)) {
+                            auto sourceIt = std::find_if(localInstance.members.begin(), localInstance.members.end(),
+                                [&](const EntityBundle::EntityMember& member) { return member.registryEntity == ref.registryEntity; });
+                            if (sourceIt == localInstance.members.end()) continue;
 
-                            const EntityBundle* nestedBundle = project->getEntityBundle(nestedBCLoc.path);
-                            if (!nestedBundle) continue;
-
-                            auto nestedSceneIt = nestedBundle->instances.find(sceneProject->id);
-                            if (nestedSceneIt == nestedBundle->instances.end()) continue;
-
-                            for (const auto& nestedInst : nestedSceneIt->second) {
-                                if (nestedInst.rootEntity != member.localEntity) continue;
-
-                                std::unordered_set<Entity> nestedMemberSet;
-                                nestedMemberSet.insert(nestedInst.rootEntity);
-                                for (const auto& nm : nestedInst.members) {
-                                    nestedMemberSet.insert(nm.localEntity);
-                                }
-
-                                std::vector<std::pair<Entity, Entity>> nestedParentCandidates;
-                                nestedParentCandidates.push_back({nestedInst.rootEntity, NULL_ENTITY});
-                                for (const auto& nm : nestedInst.members) {
-                                    nestedParentCandidates.push_back({nm.localEntity, nm.registryEntity});
-                                }
-
-                                for (const auto& [nParentLocal, nParentReg] : nestedParentCandidates) {
-                                    if (!registry->getSignature(nParentLocal).test(registry->getComponentId<Transform>())) continue;
-                                    auto transforms = registry->getComponentArray<Transform>();
-                                    size_t nParentIdx = transforms->getIndex(nParentLocal);
-                                    size_t nChildPos = 0;
-                                    for (size_t ti = nParentIdx + 1; ti < transforms->size(); ti++) {
-                                        Transform& t = transforms->getComponentFromIndex(ti);
-                                        Entity childEnt = transforms->getEntity(ti);
-                                        if (t.parent != nParentLocal) {
-                                            if (t.parent == NULL_ENTITY) break;
-                                            continue;
-                                        }
-                                        if (nestedMemberSet.find(childEnt) == nestedMemberSet.end()) {
-                                            YAML::Node localEntNode = encodeEntity(childEnt, registry, project, sceneProject);
-                                            localEntNode["parentRegistryEntity"] = nParentReg;
-                                            localEntNode["childIndex"] = nChildPos;
-                                            localEntNode["bundlePath"] = nestedBCLoc.path;
-                                            localEntNode["bundleRootRegistryEntity"] = member.registryEntity;
-                                            localEntsNode.push_back(localEntNode);
-                                        }
-                                        nChildPos++;
-                                    }
-                                }
-                                break;
+                            Entity sourceRoot = NULL_ENTITY;
+                            std::vector<Entity> sourcePath;
+                            if (!project->getBundleMemberAddress(sceneProject->id, sourceIt->localEntity, sourceRoot, sourcePath)
+                                    || sourceRoot != entity) {
+                                continue;
                             }
-                        }
 
-                        if (localEntsNode.size() > 0) {
-                            entityNode["bundleLocalEntities"] = localEntsNode;
-                        }
+                            YAML::Node entry;
+                            entry["registryEntity"] = ref.registryEntity;
+                            entry["registryPath"] = sourcePath;
+                            entry["component"] = Catalog::getComponentName(ref.componentType);
+                            entry["property"] = ref.propertyName;
+                            entry["refEntity"] = ref.refEntity;
 
-                        break;
+                            Entity refRoot = NULL_ENTITY;
+                            std::vector<Entity> refPath;
+                            if (project->getBundleMemberAddress(sceneProject->id, ref.refEntity, refRoot, refPath)) {
+                                entry["refBundleRoot"] = refRoot;
+                                entry["refRegistryPath"] = refPath;
+                            }
+                            localPropsNode.push_back(entry);
+                        }
                     }
                 }
+
+                if (overridesNode.size() > 0) entityNode["bundleOverrides"] = overridesNode;
+                if (localEntsNode.size() > 0) entityNode["bundleLocalEntities"] = localEntsNode;
+                if (localPropsNode.size() > 0) entityNode["bundleLocalProperties"] = localPropsNode;
             }
         // Bundle children are not encoded (they live in the bundle file)
     }else{
@@ -2526,7 +2475,8 @@ std::vector<Entity> editor::Stream::decodeEntity(const YAML::Node& entityNode, E
             if (bundleComp && !bundleComp->path.empty()) {
                 std::vector<Entity> bundleEntities = project->importEntityBundle(
                     sceneProject, entities, bundleComp->path, entity, false,
-                    entityNode["bundleOverrides"], entityNode["bundleLocalEntities"]);
+                    entityNode["bundleOverrides"], entityNode["bundleLocalEntities"],
+                    entityNode["bundleLocalProperties"], createNewIfExists);
                 allEntities.insert(allEntities.end(), bundleEntities.begin(), bundleEntities.end());
             }
         }

@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cerrno>
 #include <map>
+#include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
 
@@ -845,7 +846,7 @@ void editor::Generator::writeSourceFiles(const fs::path& projectPath, const fs::
     FileUtils::writeIfChanged(agentsFile, agentsContent);
 }
 
-std::vector<editor::BundleInstanceInfo> editor::Generator::writeBundleSources(const std::map<fs::path, EntityBundle>& entityBundles, uint32_t sceneId, const fs::path& projectPath, const fs::path& projectInternalPath) {
+std::vector<editor::BundleInstanceInfo> editor::Generator::writeBundleSources(const std::map<fs::path, EntityBundle>& entityBundles, uint32_t sceneId, Scene* scene, const fs::path& projectPath, const fs::path& projectInternalPath) {
     const fs::path generatedPath = getGeneratedPath(projectInternalPath);
 
     std::vector<BundleInstanceInfo> bundleInstances;
@@ -854,7 +855,16 @@ std::vector<editor::BundleInstanceInfo> editor::Generator::writeBundleSources(co
         auto sceneIt = bundle.instances.find(sceneId);
         if (sceneIt == bundle.instances.end()) continue;
 
-        for (const auto& instance : sceneIt->second) {
+        // Runtime scene clones are appended under the editor scene id. Prefer
+        // the newest metadata for a root so local ids are read from `scene`.
+        std::unordered_map<Entity, size_t> lastInstanceForRoot;
+        for (size_t i = 0; i < sceneIt->second.size(); i++) {
+            lastInstanceForRoot[sceneIt->second[i].rootEntity] = i;
+        }
+
+        for (size_t instanceIndex = 0; instanceIndex < sceneIt->second.size(); instanceIndex++) {
+            const auto& instance = sceneIt->second[instanceIndex];
+            if (lastInstanceForRoot[instance.rootEntity] != instanceIndex) continue;
             BundleInstanceInfo info;
             info.bundlePath = bundlePath;
             info.rootEntity = instance.rootEntity;
@@ -877,6 +887,41 @@ std::vector<editor::BundleInstanceInfo> editor::Generator::writeBundleSources(co
 
                     if (!ovr.overriddenComponents.empty()) {
                         info.overrides.push_back(std::move(ovr));
+                    }
+                }
+            }
+
+            // Map each member to its index in the vector the bundle function returns
+            std::vector<Entity> orderedMembers = Factory::getBundleMemberEntities(bundle.registry.get(), bundle.registryEntities);
+            info.directMemberCount = orderedMembers.size();
+            std::unordered_map<Entity, int> registryToIndex;
+            for (size_t i = 0; i < orderedMembers.size(); i++) {
+                registryToIndex[orderedMembers[i]] = static_cast<int>(i);
+            }
+            for (const auto& member : instance.members) {
+                auto idxIt = registryToIndex.find(member.registryEntity);
+                if (idxIt != registryToIndex.end()) {
+                    info.memberIndex[member.localEntity] = idxIt->second;
+                }
+            }
+
+            // Fold per-instance ref components into overrides so createScene re-emits
+            // them onto the runtime members (the component list is deduplicated below).
+            if (scene) {
+                std::unordered_map<Entity, Entity> registryToLocal;
+                for (const auto& member : instance.members) {
+                    registryToLocal[member.registryEntity] = member.localEntity;
+                }
+                for (const auto& ref : Project::collectBundleLocalRefs(scene, instance)) {
+                    auto localIt = registryToLocal.find(ref.registryEntity);
+                    if (localIt == registryToLocal.end()) continue;
+                    Entity localEntity = localIt->second;
+                    auto it = std::find_if(info.overrides.begin(), info.overrides.end(),
+                        [localEntity](const BundleOverrideInfo& o) { return o.sceneEntity == localEntity; });
+                    if (it == info.overrides.end()) {
+                        info.overrides.push_back({localEntity, {ref.componentType}});
+                    } else if (std::find(it->overriddenComponents.begin(), it->overriddenComponents.end(), ref.componentType) == it->overriddenComponents.end()) {
+                        it->overriddenComponents.push_back(ref.componentType);
                     }
                 }
             }

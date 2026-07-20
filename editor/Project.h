@@ -69,6 +69,17 @@ namespace doriax::editor{
         bool startActive = true;
     };
 
+    struct PendingBundleLocalRef {
+        Entity sourceEntity = NULL_ENTITY;
+        Entity sourceBundleRoot = NULL_ENTITY;
+        std::vector<Entity> sourceRegistryPath;
+        ComponentType componentType = ComponentType::Transform;
+        std::string propertyName;
+        Entity refEntity = NULL_ENTITY;
+        Entity refBundleRoot = NULL_ENTITY;
+        std::vector<Entity> refRegistryPath;
+    };
+
     struct SceneProject{
         uint32_t id = NULL_PROJECT_SCENE;
         std::string name = "Unknown";
@@ -94,6 +105,7 @@ namespace doriax::editor{
         std::vector<SceneScriptSource> cppScripts;
         std::vector<BundleSceneInfo> bundles;
         YAML::Node editorCameraState;
+        std::vector<PendingBundleLocalRef> pendingBundleLocalRefs;
     };
 
     struct NodeRecoveryEntry {
@@ -130,6 +142,16 @@ namespace doriax::editor{
     };
 
     using ComponentRecovery = std::map<std::string, ComponentRecoveryEntry>;
+
+    // A bundle member's entity-ref property that points at an entity outside the
+    // bundle. Such wiring is per-instance (the shared bundle registry stores None
+    // for it), so it is persisted in the scene file and reapplied on load.
+    struct BundleLocalRef {
+        Entity registryEntity;      // member's id in the bundle registry
+        ComponentType componentType;
+        std::string propertyName;
+        Entity refEntity;           // same-scene target outside the bundle
+    };
 
     class Project{
     private:
@@ -493,7 +515,18 @@ namespace doriax::editor{
 
         static std::vector<Entity> getTopLevelEntities(const EntityRegistry* registry, const std::vector<Entity>& orderedEntities);
         static void remapEntityProperties(EntityRegistry* registry, const std::vector<Entity>& entities, const std::unordered_map<Entity, Entity>& entityMap);
-        static void remapEntityPropertiesInComponent(EntityRegistry* registry, Entity entity, ComponentType componentType, const std::vector<std::string>& properties, const std::unordered_map<Entity, Entity>& entityMap);
+        // previousValues == nullptr: registry-bound remap — refs missing from entityMap
+        // (entities outside the bundle) become NULL_ENTITY so scene-local IDs never
+        // enter the shared registry. previousValues != nullptr: instance-bound remap —
+        // on a null or unmapped registry value the instance's pre-copy value decides:
+        // if it pointed at a bundle member (or was None) the registry None is applied,
+        // so intentional shared clears propagate; only same-scene out-of-bundle
+        // pre-copy values are restored as per-instance wiring.
+        static void remapEntityPropertiesInComponent(EntityRegistry* registry, Entity entity, ComponentType componentType, const std::vector<std::string>& properties, const std::unordered_map<Entity, Entity>& entityMap, const std::unordered_map<std::string, EntityReference>* previousValues);
+        static std::unordered_map<std::string, EntityReference> captureEntityRefProperties(EntityRegistry* registry, Entity entity, ComponentType componentType);
+        // Copy a shared (non-overridden) component from the bundle registry onto an
+        // instance member, remapping in-bundle refs and restoring out-of-bundle ones.
+        static void reloadInstanceComponentFromBundle(EntityBundle* bundle, uint32_t sceneId, EntityRegistry* scene, Entity entity, ComponentType componentType);
 
         //=== EntityBundle part ===
 
@@ -509,8 +542,18 @@ namespace doriax::editor{
 
         YAML::Node encodeEntityBundleNode(const std::filesystem::path& filepath) const;
 
-        std::vector<Entity> importEntityBundle(SceneProject* sceneProject, std::vector<Entity>* entities, const std::filesystem::path& filepath, Entity rootEntity, bool needSaveScene = true, const YAML::Node& bundleOverrides = YAML::Node(), const YAML::Node& bundleLocalEntities = YAML::Node());
+        std::vector<Entity> importEntityBundle(SceneProject* sceneProject, std::vector<Entity>* entities, const std::filesystem::path& filepath, Entity rootEntity, bool needSaveScene = true, const YAML::Node& bundleOverrides = YAML::Node(), const YAML::Node& bundleLocalEntities = YAML::Node(), const YAML::Node& bundleLocalProperties = YAML::Node(), bool createNewLocalEntitiesIfExists = true);
         bool unimportEntityBundle(uint32_t sceneId, const std::filesystem::path& filepath, Entity rootEntity, const std::vector<Entity>& memberEntities);
+
+        // Per-instance entity-ref persistence: an out-of-bundle ref is a same-scene
+        // entity-ref on a shared member component that points outside its instance,
+        // or any same-scene entity-ref on an overridden component (whose raw member
+        // IDs are unstable). Cross-scene refs remain shared registry state.
+        static std::vector<BundleLocalRef> collectBundleLocalRefs(const EntityRegistry* registry, const EntityBundle::Instance& instance);
+        static bool setEntityRefProperty(EntityRegistry* registry, Entity entity, ComponentType componentType, const std::string& propertyName, Entity refEntity);
+        bool getBundleMemberAddress(uint32_t sceneId, Entity entity, Entity& rootEntity, std::vector<Entity>& registryPath) const;
+        Entity resolveBundleMemberAddress(uint32_t sceneId, Entity rootEntity, const std::vector<Entity>& registryPath) const;
+        void resolvePendingBundleLocalRefs(SceneProject* sceneProject, bool discardUnresolved);
 
         bool addEntityToBundle(uint32_t sceneId, Entity entity, Entity parent, bool createItself = true);
         bool addEntityToBundle(uint32_t sceneId, const NodeRecovery& recoveryData, Entity parent, bool createItself = true);

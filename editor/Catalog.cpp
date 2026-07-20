@@ -1907,6 +1907,9 @@ namespace {
             for (auto& [boneName, boneEntity] : comp->bonesNameMapping) {
                 ps["bonesNameMapping[" + boneName + "]"] = {PropertyType::Entity, UpdateFlags_None, (void*)&defEntity, (void*)&boneEntity};
             }
+            for (auto& [nodeIndex, nodeEntity] : comp->meshNodesMapping) {
+                ps["meshNodesMapping[" + std::to_string(nodeIndex) + "]"] = {PropertyType::Entity, UpdateFlags_None, (void*)&defEntity, (void*)&nodeEntity};
+            }
         }
     }
 
