@@ -197,6 +197,10 @@ namespace doriax{
         void setDefaultCustomShader(ShaderType type, const std::string& path);
         const std::string& getDefaultCustomShader(ShaderType type) const;
 
+        // ordered user post-process chain; setting it rebuilds the RenderSystem passes
+        const std::vector<PostProcessPass>& getPostProcessPasses() const;
+        void setPostProcessPasses(const std::vector<PostProcessPass>& passes);
+
         bool canReceiveUIEvents();
 
         UIEventState getEnableUIEvents() const;

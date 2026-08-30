@@ -169,12 +169,19 @@ RenderSystem::RenderSystem(Scene* scene): SubSystem(scene){
     ssrSlotParams = -1;
     ssrBlurSlotParams = -1;
     compositeSlotParams = -1;
-    ssrSwapchainRedirect = false;
+    swapchainRedirect = false;
 
     blitLoaded = false;
     fixedResWidth = 0;
     fixedResHeight = 0;
     blitSlotParams = -1;
+
+    postProcessLoaded = false;
+    postProcessNeedReload = false;
+    postProcessWidth = 0;
+    postProcessHeight = 0;
+    postProcessNeedsDepth = false;
+    postProcessNeedsGBuffer = false;
 
     shadowAtlasSlotResolution = 0;
     shadowAtlasCols = 0;
@@ -235,6 +242,7 @@ void RenderSystem::destroy(){
     destroySSAO();
     destroySSR();
     destroyBlit();
+    destroyPostProcess();
     shadowAtlasFramebuffer.destroyFramebuffer();
     shadowAtlasSlotResolution = 0;
     shadowAtlasCols = 0;
@@ -3904,6 +3912,240 @@ void RenderSystem::renderFixedResolutionBlit(){
     renderBlit(&fixedResFramebuffer.getRender().getColorTexture(), Engine::getViewRect());
 }
 
+// writes one post-process uniform at its reflected offset in the block
+static void writePostProcessUniform(std::vector<uint8_t>& block, const ShaderUniform& uniform, const Vector4& value){
+    float components[4] = {value.x, value.y, value.z, value.w};
+
+    int count = 0;
+    bool isInt = false;
+    switch (uniform.type){
+        case ShaderUniformType::FLOAT:  count = 1; break;
+        case ShaderUniformType::FLOAT2: count = 2; break;
+        case ShaderUniformType::FLOAT3: count = 3; break;
+        case ShaderUniformType::FLOAT4: count = 4; break;
+        case ShaderUniformType::INT:    count = 1; isInt = true; break;
+        case ShaderUniformType::INT2:   count = 2; isInt = true; break;
+        case ShaderUniformType::INT3:   count = 3; isInt = true; break;
+        case ShaderUniformType::INT4:   count = 4; isInt = true; break;
+        default: return; // matrices are not editable
+    }
+
+    if ((size_t)(uniform.offset + count * 4) > block.size())
+        return;
+
+    for (int i = 0; i < count; i++){
+        if (isInt){
+            int intValue = (int)components[i];
+            memcpy(block.data() + uniform.offset + i * 4, &intValue, 4);
+        }else{
+            memcpy(block.data() + uniform.offset + i * 4, &components[i], 4);
+        }
+    }
+}
+
+void RenderSystem::needReloadPostProcess(){
+    postProcessNeedReload = true;
+}
+
+void RenderSystem::loadPostProcess(){
+    if (postProcessLoaded && !postProcessNeedReload)
+        return;
+
+    // a pass whose shader is still building aborts the attempt, so the partial
+    // chain is always dropped before rebuilding
+    for (int i = 0; i < (int)postProcessPasses.size(); i++){
+        postProcessPasses[i].render.destroy();
+        postProcessPasses[i].shader.reset();
+    }
+    postProcessPasses.clear();
+    postProcessNeedReload = false;
+    postProcessLoaded = false;
+    postProcessNeedsDepth = false;
+    postProcessNeedsGBuffer = false;
+
+    const std::vector<PostProcessPass>& passes = scene->getPostProcessPasses();
+
+    for (int i = 0; i < (int)passes.size(); i++){
+        if (!passes[i].enabled)
+            continue;
+
+        PostProcessRuntime pass;
+        pass.slotParams = -1;
+        pass.hasResolution = false;
+        pass.hasTime = false;
+
+        // an empty path is the built-in passthrough, also the fallback of a failed fork
+        pass.customId = ShaderPool::registerCustomShader(passes[i].shader);
+        pass.shader = ShaderPool::get(ShaderType::POSTPROCESS, 0, pass.customId);
+        if (pass.customId != 0 && ShaderPool::isShaderBuildFailed(ShaderType::POSTPROCESS, 0, pass.customId)){
+            // the pool already logged the failure; the panel marks the pass
+            pass.customId = 0;
+            pass.shader = ShaderPool::get(ShaderType::POSTPROCESS, 0);
+        }
+        // shaders may still be building (async in the editor)
+        if (!pass.shader || !pass.shader->isCreated())
+            return;
+
+        pass.render.beginLoad(PrimitiveType::TRIANGLES);
+        pass.render.setShader(pass.shader.get());
+        // the chain never targets the swapchain directly, renderPostProcess blits for that
+        if (!pass.render.endLoad(PIP_RTT, false, true, CullingMode::BACK, WindingOrder::CCW))
+            return;
+
+        ShaderData& sd = pass.shader.get()->shaderData;
+        pass.slotSceneColor = sd.getTextureIndexByName("u_sceneColorTexture");
+        pass.slotDepth = sd.getTextureIndexByName("u_depthTexture");
+        pass.slotGBuffer = sd.getTextureIndexByName("u_gbufferTexture");
+        pass.slotSSAO = sd.getTextureIndexByName("u_ssaoTexture");
+
+        if (pass.slotDepth.first != -1)
+            postProcessNeedsDepth = true;
+        if (pass.slotGBuffer.first != -1)
+            postProcessNeedsGBuffer = true;
+
+        unsigned int sizeBytes = 0;
+        const std::vector<ShaderUniform>* members = sd.getUniformBlockMembers("u_fs_postParams", sizeBytes);
+        if (members && sizeBytes > 0){
+            pass.slotParams = sd.getUniformBlockIndexByName("u_fs_postParams");
+            // the backend declares the block rounded up to the std140 vec4 stride
+            pass.params.assign(((sizeBytes + 15) / 16) * 16, 0);
+
+            for (int m = 0; m < (int)members->size(); m++){
+                const ShaderUniform& uniform = (*members)[m];
+                std::string name = ShaderData::getUniformShortName(uniform.name);
+
+                if (name == "resolution"){
+                    pass.hasResolution = true;
+                    pass.resolutionUniform = uniform;
+                }else if (name == "time"){
+                    pass.hasTime = true;
+                    pass.timeUniform = uniform;
+                }else{
+                    // stored by name, so a renamed or removed member just drops
+                    for (int v = 0; v < (int)passes[i].uniforms.size(); v++){
+                        if (passes[i].uniforms[v].first == name){
+                            writePostProcessUniform(pass.params, uniform, passes[i].uniforms[v].second);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        postProcessPasses.push_back(std::move(pass));
+    }
+
+    postProcessLoaded = true;
+}
+
+void RenderSystem::destroyPostProcess(){
+    for (int i = 0; i < (int)postProcessPasses.size(); i++){
+        postProcessPasses[i].render.destroy();
+        postProcessPasses[i].shader.reset();
+        ShaderPool::remove(ShaderType::POSTPROCESS, 0, postProcessPasses[i].customId);
+    }
+    postProcessPasses.clear();
+
+    postProcessFramebuffer[0].destroy();
+    postProcessFramebuffer[1].destroy();
+
+    postProcessWidth = 0;
+    postProcessHeight = 0;
+    postProcessNeedsDepth = false;
+    postProcessNeedsGBuffer = false;
+    postProcessNeedReload = false;
+    postProcessLoaded = false;
+}
+
+bool RenderSystem::ensurePostProcessFramebuffers(unsigned int width, unsigned int height){
+    if (width == 0 || height == 0)
+        return false;
+
+    if (postProcessFramebuffer[0].isCreated() && postProcessWidth == width && postProcessHeight == height)
+        return true;
+
+    // the chain ping-pongs between the two; its last pass writes the real destination
+    for (int i = 0; i < 2; i++){
+        postProcessFramebuffer[i].destroy();
+        postProcessFramebuffer[i].setWidth(width);
+        postProcessFramebuffer[i].setHeight(height);
+        postProcessFramebuffer[i].setMinFilter(TextureFilter::LINEAR);
+        postProcessFramebuffer[i].setMagFilter(TextureFilter::LINEAR);
+        postProcessFramebuffer[i].setWrapU(TextureWrap::CLAMP_TO_EDGE);
+        postProcessFramebuffer[i].setWrapV(TextureWrap::CLAMP_TO_EDGE);
+        postProcessFramebuffer[i].create();
+    }
+
+    postProcessWidth = width;
+    postProcessHeight = height;
+
+    return postProcessFramebuffer[0].isCreated() && postProcessFramebuffer[1].isCreated();
+}
+
+void RenderSystem::renderPostProcess(FramebufferRender* destination){
+    // depth is the SSR G-buffer or the chain's own pre-pass; the G-buffer
+    // normal/roughness only exists while SSR is on
+    TextureRender* depthTexture = &emptyBlack;
+    TextureRender* gbufferTexture = &emptyBlack;
+    if (postProcessNeedsGBuffer && gbufferFramebuffer.isCreated()){
+        gbufferTexture = &gbufferFramebuffer.getRender().getColorAttachmentTexture(1);
+    }
+    if (postProcessNeedsDepth){
+        if (gbufferFramebuffer.isCreated()){
+            depthTexture = &gbufferFramebuffer.getRender().getColorAttachmentTexture(0);
+        }else if (ssaoDepthFramebuffer.isCreated()){
+            depthTexture = &ssaoDepthFramebuffer.getRender().getColorTexture();
+        }
+    }
+    TextureRender* ssaoTexture = currentSSAOTexture ? currentSSAOTexture : &emptyWhite;
+
+    // the color pass (or the SSR composite) was redirected into buffer 0
+    TextureRender* input = &postProcessFramebuffer[0].getRender().getColorTexture();
+    int pingPong = 1;
+
+    for (int i = 0; i < (int)postProcessPasses.size(); i++){
+        PostProcessRuntime& pass = postProcessPasses[i];
+        bool writeDestination = destination && (i + 1 == (int)postProcessPasses.size());
+
+        // rewritten every frame so they survive a resize and can animate
+        if (pass.hasResolution){
+            float w = (float)postProcessWidth;
+            float h = (float)postProcessHeight;
+            writePostProcessUniform(pass.params, pass.resolutionUniform, Vector4(w, h, 1.0f / w, 1.0f / h));
+        }
+        if (pass.hasTime){
+            float seconds = (float)Engine::getSystemTime();
+            writePostProcessUniform(pass.params, pass.timeUniform, Vector4(seconds, seconds, seconds, seconds));
+        }
+
+        if (writeDestination){
+            postProcessPassRender.startRenderPass(destination);
+        }else{
+            postProcessPassRender.startRenderPass(&postProcessFramebuffer[pingPong].getRender());
+        }
+
+        if (pass.render.beginDraw(PIP_RTT)){
+            pass.render.addTexture(pass.slotSceneColor, ShaderStageType::FRAGMENT, input);
+            pass.render.addTexture(pass.slotDepth, ShaderStageType::FRAGMENT, depthTexture);
+            pass.render.addTexture(pass.slotGBuffer, ShaderStageType::FRAGMENT, gbufferTexture);
+            pass.render.addTexture(pass.slotSSAO, ShaderStageType::FRAGMENT, ssaoTexture);
+            pass.render.applyUniformBlock(pass.slotParams, (unsigned int)pass.params.size(), pass.params.data());
+            pass.render.draw(0, 3, 1);
+        }
+        postProcessPassRender.endRenderPass();
+
+        if (!writeDestination){
+            input = &postProcessFramebuffer[pingPong].getRender().getColorTexture();
+            pingPong = 1 - pingPong;
+        }
+    }
+
+    // the swapchain is written by the blit pass, which handles the GL orientation flip
+    if (!destination){
+        renderBlit(input, Engine::getViewRect());
+    }
+}
+
 void RenderSystem::presentFramebufferToSwapchain(Framebuffer* source){
     if (!source || !source->isCreated())
         return;
@@ -4755,8 +4997,8 @@ Rect RenderSystem::getScissorRect(UILayoutComponent& layout, ImageComponent& img
             viewHeight = (float)scene->getFixedResolutionHeight();
             targetWidth = viewWidth;
             targetHeight = viewHeight;
-        }else if (ssrSwapchainRedirect){
-            // same for the SSR scene color buffer, which is the size of the view rect
+        }else if (swapchainRedirect){
+            // same for the redirected scene color buffer, which is the size of the view rect
             targetWidth = viewWidth;
             targetHeight = viewHeight;
         }
@@ -5854,7 +6096,7 @@ bool RenderSystem::isRenderingFlipped(const CameraComponent& camera) const{
     // OpenGL offscreen targets are bottom-up; rendering them with a Y-flipped
     // projection makes framebuffer textures top-left origin on every backend.
     // Must match the PIP_RTT pipeline selection (its winding is reversed on GL).
-    return (camera.renderToTexture || Engine::getFramebuffer() || isFixedResolutionActive() || ssrSwapchainRedirect) && Engine::isOpenGL();
+    return (camera.renderToTexture || Engine::getFramebuffer() || isFixedResolutionActive() || swapchainRedirect) && Engine::isOpenGL();
 }
 
 bool RenderSystem::isFixedResolutionActive() const{
@@ -5866,27 +6108,34 @@ bool RenderSystem::isFixedResolutionActive() const{
         && Engine::getMainScene() == scene;
 }
 
-void RenderSystem::updateSSRSwapchainRedirect(){
-    // SSR needs the scene in an offscreen color buffer. Without a framebuffer
-    // destination (exported builds) the color pass is redirected into it and the
-    // composite targets the swapchain. Main scene only: a layer scene composites
-    // over the scene below, and its own pass would clear it.
+void RenderSystem::updateSwapchainRedirect(){
+    // SSR and the post-process chain need the scene in an offscreen color buffer. Without
+    // a framebuffer destination (exported builds) the color pass is redirected into it and
+    // the last pass targets the swapchain. Main scene only: a layer scene composites over
+    // the scene below, and its own pass would clear it.
     bool redirect = false;
 
-    if (scene->isSSREnabled() && !Engine::getFramebuffer() && !isFixedResolutionActive()
+    if (!Engine::getFramebuffer() && !isFixedResolutionActive()
             && Engine::getMainScene() == scene && Engine::isViewLoaded()){
-        loadSSR();
-
         unsigned int w = (unsigned int)Engine::getViewRect().getWidth();
         unsigned int h = (unsigned int)Engine::getViewRect().getHeight();
 
         // the meshes render with PIP_RTT (flipped on GL) while it is on, so the
         // redirect only starts once everything it needs exists
-        redirect = ssrLoaded && ensureSSRFramebuffers(w, h) && ensureGBufferFramebuffer(w, h);
+        if (scene->isSSREnabled()){
+            loadSSR();
+            redirect = ssrLoaded && ensureSSRFramebuffers(w, h) && ensureGBufferFramebuffer(w, h);
+        }
+        if (!redirect && !scene->getPostProcessPasses().empty()){
+            loadPostProcess();
+            loadBlit();
+            redirect = postProcessLoaded && blitLoaded && !postProcessPasses.empty()
+                    && ensurePostProcessFramebuffers(w, h);
+        }
     }
 
-    if (redirect != ssrSwapchainRedirect){
-        ssrSwapchainRedirect = redirect;
+    if (redirect != swapchainRedirect){
+        swapchainRedirect = redirect;
         // the flip is baked in the MVP matrices
         scene->getComponent<CameraComponent>(scene->getCamera()).needUpdate = true;
     }
@@ -6055,7 +6304,7 @@ void RenderSystem::update(double dt){
     updateReflectionProbes(dt);
 
     // the pipeline mask below depends on the redirect
-    updateSSRSwapchainRedirect();
+    updateSwapchainRedirect();
 
     Entity mainCameraEntity = scene->getCamera();
     uint8_t pipelines = 0;
@@ -6115,7 +6364,7 @@ void RenderSystem::update(double dt){
             pipelines |= PIP_DEFAULT;
         }
 
-        if (camera.renderToTexture || Engine::getFramebuffer() || isFixedResolutionActive() || ssrSwapchainRedirect){
+        if (camera.renderToTexture || Engine::getFramebuffer() || isFixedResolutionActive() || swapchainRedirect){
             pipelines |= PIP_RTT;
         }
 
@@ -6804,7 +7053,7 @@ void RenderSystem::draw(){
         // effects). Further below the opaque color pass is redirected into an offscreen
         // buffer, then renderSSR() marches the G-buffer and composites reflections to the
         // real destination: a framebuffer (editor / render-to-texture / fixed resolution)
-        // or the swapchain in exported builds (see updateSSRSwapchainRedirect).
+        // or the swapchain in exported builds (see updateSwapchainRedirect).
         // Fixed game resolution (main scene main camera only): the color pass is
         // redirected into fixedResFramebuffer at the scene's fixed size, and
         // renderFixedResolutionBlit() upscales it to the view rect afterwards.
@@ -6819,7 +7068,7 @@ void RenderSystem::draw(){
 
         bool useSSR = false;
         FramebufferRender* ssrDestination = nullptr;
-        if (isMainCamera && scene->isSSREnabled() && (Engine::getFramebuffer() || camera.renderToTexture || useFixedRes || ssrSwapchainRedirect)){
+        if (isMainCamera && scene->isSSREnabled() && (Engine::getFramebuffer() || camera.renderToTexture || useFixedRes || swapchainRedirect)){
             loadSSR();
             unsigned int sw = (unsigned int)Engine::getViewRect().getWidth();
             unsigned int sh = (unsigned int)Engine::getViewRect().getHeight();
@@ -6835,6 +7084,41 @@ void RenderSystem::draw(){
             }
         }
 
+        // User post-process chain: like SSR it needs the scene color offscreen, so it
+        // follows the same destination-capture rule. Main scene only: its last pass
+        // writes every pixel, so a layer scene would erase the scene below it.
+        bool usePostProcess = false;
+        FramebufferRender* postDestination = nullptr;
+        if (isMainCamera && !scene->getPostProcessPasses().empty()
+                && (Engine::getMainScene() == scene || camera.renderToTexture)
+                && (Engine::getFramebuffer() || camera.renderToTexture || useFixedRes || swapchainRedirect)){
+            loadPostProcess();
+
+            // only a swapchain destination ends the chain with a blit
+            bool needsBlit = !(Engine::getFramebuffer() || camera.renderToTexture || useFixedRes);
+            if (needsBlit){
+                loadBlit();
+            }
+
+            unsigned int pw = useSSR ? ssrWidth : (unsigned int)Engine::getViewRect().getWidth();
+            unsigned int ph = useSSR ? ssrHeight : (unsigned int)Engine::getViewRect().getHeight();
+            if (useFixedRes){
+                pw = fixedResWidth;
+                ph = fixedResHeight;
+            }
+
+            if (postProcessLoaded && !postProcessPasses.empty() && (!needsBlit || blitLoaded)
+                    && ensurePostProcessFramebuffers(pw, ph)){
+                usePostProcess = true;
+
+                // a pass sampling depth needs the pre-pass when neither SSR nor SSAO ran
+                if (postProcessNeedsDepth && !useSSR && !scene->isSSAOEnabled()
+                        && ensureSSAOFramebuffers(pw, ph)){
+                    renderDepthPrePass(camera);
+                }
+            }
+        }
+
         // Screen-space AO is produced once for the main camera before its color pass.
         // When SSR is active its G-buffer already holds the camera depth (color[0]), so
         // SSAO reuses it instead of running a second geometry pre-pass. Other cameras
@@ -6847,7 +7131,7 @@ void RenderSystem::draw(){
 
         // whether this camera's color pass targets an offscreen framebuffer
         // (selects PIP_RTT pipelines and flipped rendering on GL)
-        bool offscreenTarget = camera.renderToTexture || Engine::getFramebuffer() || useFixedRes || useSSR;
+        bool offscreenTarget = camera.renderToTexture || Engine::getFramebuffer() || useFixedRes || useSSR || usePostProcess;
 
         if (Engine::getMainScene() == scene || camera.renderToTexture){
             camera.render.setClearColor(scene->getBackgroundColor());
@@ -6858,24 +7142,40 @@ void RenderSystem::draw(){
             camera.render.setLoadActionLoad();
         }
 
-        if (useSSR){
-            // capture the real destination for the composite pass, then redirect the
-            // scene into the offscreen color buffer
+        if (useSSR || usePostProcess){
+            // capture the real destination for the composite / post-process chain, then
+            // redirect the scene into the offscreen color buffer
+            FramebufferRender* destination = nullptr;
             if (camera.renderToTexture){
                 if (!camera.framebuffer->isCreated()){
                     camera.framebuffer->create();
                 }
-                ssrDestination = &camera.framebuffer->getRender();
+                destination = &camera.framebuffer->getRender();
             }else if (useFixedRes){
-                ssrDestination = &fixedResFramebuffer.getRender();
+                destination = &fixedResFramebuffer.getRender();
             }else if (Engine::getFramebuffer()){
                 if (!Engine::getFramebuffer()->isCreated()){
                     Engine::getFramebuffer()->create();
                 }
-                ssrDestination = &Engine::getFramebuffer()->getRender();
+                destination = &Engine::getFramebuffer()->getRender();
             }
-            camera.render.startRenderPass(&sceneColorFramebuffer.getRender());
-            camera.render.applyViewport(Rect(0, 0, (float)ssrWidth, (float)ssrHeight));
+
+            // the chain samples its input, so whatever runs before it writes the first
+            // ping-pong buffer and the chain writes the real destination
+            if (usePostProcess){
+                postDestination = destination;
+                ssrDestination = &postProcessFramebuffer[0].getRender();
+            }else{
+                ssrDestination = destination;
+            }
+
+            if (useSSR){
+                camera.render.startRenderPass(&sceneColorFramebuffer.getRender());
+                camera.render.applyViewport(Rect(0, 0, (float)ssrWidth, (float)ssrHeight));
+            }else{
+                camera.render.startRenderPass(&postProcessFramebuffer[0].getRender());
+                camera.render.applyViewport(Rect(0, 0, (float)postProcessWidth, (float)postProcessHeight));
+            }
         }else if (useFixedRes){
             // full offscreen target; letterbox/upscale happens in the blit pass
             camera.render.startRenderPass(&fixedResFramebuffer.getRender());
@@ -7058,6 +7358,11 @@ void RenderSystem::draw(){
         // real destination (the swapchain or the captured framebuffer).
         if (useSSR){
             renderSSR(camera, ssrDestination);
+        }
+
+        // buffer 0 now holds the scene color (or the SSR composite)
+        if (usePostProcess){
+            renderPostProcess(postDestination);
         }
 
         // Fixed game resolution: upscale the offscreen scene color to the view

@@ -485,6 +485,16 @@ const std::string& Scene::getDefaultCustomShader(ShaderType type) const{
     }
 }
 
+const std::vector<PostProcessPass>& Scene::getPostProcessPasses() const{
+    return settings.postProcess;
+}
+
+void Scene::setPostProcessPasses(const std::vector<PostProcessPass>& passes){
+    settings.postProcess = passes;
+    // shaders and bindings are resolved per chain change, not per frame
+    getSystem<RenderSystem>()->needReloadPostProcess();
+}
+
 bool Scene::canReceiveUIEvents(){
     switch (this->uiEventState) {
         case UIEventState::ENABLED:

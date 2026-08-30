@@ -2628,6 +2628,11 @@ void editor::Project::collectSceneShaderKeys(const SceneProject* sceneProject, s
         keys.insert(ShaderPool::getShaderKey(ShaderType::COMPOSITE, 0));
     }
 
+    // disabled passes ship too: the generated scene carries the whole chain
+    for (const PostProcessPass& pass : scene->getPostProcessPasses()) {
+        insertKeys(ShaderType::POSTPROCESS, 0, ShaderPool::registerCustomShader(pass.shader));
+    }
+
     // fixed resolution upscales with it and a scene stack is presented with it
     keys.insert(ShaderPool::getShaderKey(ShaderType::BLIT, 0));
 
@@ -2697,6 +2702,12 @@ void editor::Project::invalidateCustomShaders() {
                 flagReload(ln->needReload, sceneLines || !ln->customShader.empty());
             if (SkyComponent* sky = scene->findComponent<SkyComponent>(entity))
                 flagReload(sky->needReload, sceneSky || !sky->customShader.empty());
+        }
+
+        // post-process passes hold their shader directly, so the chain is rebuilt whole
+        if (!scene->getPostProcessPasses().empty()) {
+            scene->getSystem<RenderSystem>()->needReloadPostProcess();
+            sceneProject.needUpdateRender = true;
         }
     }
 }

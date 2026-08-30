@@ -102,6 +102,10 @@ bool ShaderPool::parseShaderTypeToken(const std::string& typeToken, ShaderType& 
         shaderType = ShaderType::BLIT;
         return true;
     }
+    if (typeToken == "postprocess") {
+        shaderType = ShaderType::POSTPROCESS;
+        return true;
+    }
 
     return false;
 }
@@ -398,6 +402,7 @@ std::string ShaderPool::getShaderTypeName(ShaderType shaderType, bool lowerCase)
         case ShaderType::COMPOSITE: return lowerCase ? "composite" : "Composite";
         case ShaderType::SHADOW2D: return lowerCase ? "shadow2d" : "Shadow 2D";
         case ShaderType::BLIT:   return lowerCase ? "blit"   : "Blit";
+        case ShaderType::POSTPROCESS: return lowerCase ? "postprocess" : "Post-process";
         default:                 return lowerCase ? "unknown": "Unknown";
     }
 }

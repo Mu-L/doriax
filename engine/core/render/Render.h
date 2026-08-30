@@ -52,7 +52,9 @@ namespace doriax{
         SSR_BLUR,   // fullscreen premultiplied blur of the SSR result (glossy)
         COMPOSITE,  // fullscreen composite of scene color + SSR reflections
         SHADOW2D,   // 1D polar shadow pass: occluder segments into a 2D-light atlas row
-        BLIT        // fullscreen upscale of the fixed-resolution scene color
+        BLIT,       // fullscreen upscale of the fixed-resolution scene color
+        // keep appending: the ShaderKey stores this enum and validates cached .sdat
+        POSTPROCESS // fullscreen user post-process pass
     };
 
     enum class AttributeType{

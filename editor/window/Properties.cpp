@@ -5076,6 +5076,226 @@ void editor::Properties::drawSceneShaderRow(SceneProject* sceneProject, ShaderTy
     drawShaderRowContents(shaderType, currentShader, setShader, onFork, scenePropertyName);
 }
 
+void editor::Properties::drawPostProcessUniforms(uint32_t sceneId, const std::vector<PostProcessPass>& passes, size_t index){
+    uint16_t customId = ShaderPool::registerCustomShader(passes[index].shader);
+    std::shared_ptr<ShaderRender> shader = ShaderPool::get(ShaderType::POSTPROCESS, 0, customId);
+    bool buildFailed = customId != 0 && ShaderPool::isShaderBuildFailed(ShaderType::POSTPROCESS, 0, customId);
+
+    if (buildFailed || !shader || !shader->isCreated()){
+        if (!passes[index].shader.empty()){
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(1);
+            // a failed fork keeps rendering, the runtime falls back to the built-in
+            ImGui::TextDisabled("%s", buildFailed ? "Shader failed to build" : "Building shader...");
+        }
+        return;
+    }
+
+    unsigned int sizeBytes = 0;
+    const std::vector<ShaderUniform>* members = shader->shaderData.getUniformBlockMembers("u_fs_postParams", sizeBytes);
+    if (!members)
+        return;
+
+    for (size_t m = 0; m < members->size(); m++){
+        const ShaderUniform& uniform = (*members)[m];
+        std::string name = ShaderData::getUniformShortName(uniform.name);
+
+        // shown but not editable: RenderSystem rewrites these every frame
+        if (name == "resolution" || name == "time"){
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("%s", name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextDisabled("Set by the engine");
+            ImGui::SameLine();
+            helpMarker(name == "resolution"
+                ? "Reserved uniform, written every frame with the size of the pass target: xy = width and height, zw = 1 / width and 1 / height.\n\nRename it to edit a value of your own here."
+                : "Reserved uniform, written every frame with the seconds elapsed since startup.\n\nRename it to edit a value of your own here.");
+            continue;
+        }
+
+        int components = 0;
+        bool isInt = false;
+        switch (uniform.type){
+            case ShaderUniformType::FLOAT:  components = 1; break;
+            case ShaderUniformType::FLOAT2: components = 2; break;
+            case ShaderUniformType::FLOAT3: components = 3; break;
+            case ShaderUniformType::FLOAT4: components = 4; break;
+            case ShaderUniformType::INT:    components = 1; isInt = true; break;
+            case ShaderUniformType::INT2:   components = 2; isInt = true; break;
+            case ShaderUniformType::INT3:   components = 3; isInt = true; break;
+            case ShaderUniformType::INT4:   components = 4; isInt = true; break;
+            default: continue; // matrices are not editable
+        }
+
+        Vector4 value;
+        for (size_t v = 0; v < passes[index].uniforms.size(); v++){
+            if (passes[index].uniforms[v].first == name){
+                value = passes[index].uniforms[v].second;
+                break;
+            }
+        }
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::Text("%s", name.c_str());
+        ImGui::TableSetColumnIndex(1);
+
+        float values[4] = {value.x, value.y, value.z, value.w};
+        bool changed = false;
+        std::string uniformId = "##pp_uniform_" + name;
+        ImGui::SetNextItemWidth(-1);
+        if (isInt){
+            int intValues[4] = {(int)values[0], (int)values[1], (int)values[2], (int)values[3]};
+            changed = ImGui::DragScalarN(uniformId.c_str(), ImGuiDataType_S32, intValues, components, 1.0f);
+            for (int c = 0; c < 4; c++)
+                values[c] = (float)intValues[c];
+        }else{
+            changed = ImGui::DragScalarN(uniformId.c_str(), ImGuiDataType_Float, values, components, 0.01f);
+        }
+
+        if (changed){
+            std::vector<PostProcessPass> newPasses = passes;
+            std::vector<std::pair<std::string, Vector4>>& uniforms = newPasses[index].uniforms;
+            Vector4 newValue(values[0], values[1], values[2], values[3]);
+
+            bool found = false;
+            for (size_t v = 0; v < uniforms.size(); v++){
+                if (uniforms[v].first == name){
+                    uniforms[v].second = newValue;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                uniforms.push_back({name, newValue});
+
+            // dragging merges into one undo step
+            CommandHandle::get(sceneId)->addCommand(
+                new ScenePropertyCmd<std::vector<PostProcessPass>>(project, sceneId, "post_process", newPasses));
+        }
+    }
+}
+
+void editor::Properties::drawScenePostProcess(SceneProject* sceneProject){
+    const std::vector<PostProcessPass> passes = Catalog::getSceneProperty<std::vector<PostProcessPass>>(sceneProject->scene, "post_process");
+    uint32_t sceneId = sceneProject->id;
+
+    // the chain is one scene property, so every edit here commits a modified copy
+    auto setPasses = [this, sceneId](const std::vector<PostProcessPass>& value){
+        CommandHandle::get(sceneId)->addCommandNoMerge(
+            new ScenePropertyCmd<std::vector<PostProcessPass>>(project, sceneId, "post_process", value));
+    };
+
+    ImGuiTableFlags tableFlags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame;
+    float iconWidth = ImGui::CalcTextSize(ICON_FA_TRASH_CAN).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+
+    for (size_t i = 0; i < passes.size(); i++){
+        ImGui::PushID((int)i);
+
+        bool enabled = passes[i].enabled;
+        if (ImGui::Checkbox("##pp_enabled", &enabled)){
+            std::vector<PostProcessPass> newPasses = passes;
+            newPasses[i].enabled = enabled;
+            setPasses(newPasses);
+        }
+        ImGui::SameLine();
+        ImGui::Text("Pass %zu", i + 1);
+
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, ImGui::GetContentRegionAvail().x - iconWidth * 3.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+
+        ImGui::BeginDisabled(i == 0);
+        if (ImGui::Button(ICON_FA_ARROW_UP"##pp_up")){
+            std::vector<PostProcessPass> newPasses = passes;
+            std::swap(newPasses[i], newPasses[i - 1]);
+            setPasses(newPasses);
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        ImGui::BeginDisabled(i + 1 == passes.size());
+        if (ImGui::Button(ICON_FA_ARROW_DOWN"##pp_down")){
+            std::vector<PostProcessPass> newPasses = passes;
+            std::swap(newPasses[i], newPasses[i + 1]);
+            setPasses(newPasses);
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        bool removed = ImGui::Button(ICON_FA_TRASH_CAN"##pp_remove");
+        if (removed){
+            std::vector<PostProcessPass> newPasses = passes;
+            newPasses.erase(newPasses.begin() + i);
+            setPasses(newPasses);
+        }
+        ImGui::PopStyleColor(2);
+
+        if (removed){
+            ImGui::PopID();
+            break;
+        }
+
+        if (ImGui::BeginTable("scene_post_process_pass_table", 2, tableFlags)){
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, getLabelSize("Shader"));
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::Text("Shader");
+            ImGui::TableSetColumnIndex(1);
+
+            auto setShader = [&](const std::string& value){
+                std::vector<PostProcessPass> newPasses = passes;
+                newPasses[i].shader = value;
+                newPasses[i].uniforms.clear(); // another shader has other members
+                setPasses(newPasses);
+            };
+            std::string defaultName = sceneProject->name + " Post " + std::to_string(i + 1);
+            auto onFork = [this, sceneId, i, defaultName](){
+                shaderForkDialog.open(project, ShaderType::POSTPROCESS, defaultName,
+                    [this, sceneId, i](const std::filesystem::path& directory, const std::string& name, bool forkIncludes){
+                        SceneProject* currentScene = project->getScene(sceneId);
+                        if (!currentScene || !currentScene->scene){
+                            Backend::getApp().registerAlert("Error", "The scene is no longer available.");
+                            return;
+                        }
+                        std::vector<PostProcessPass> newPasses = Catalog::getSceneProperty<std::vector<PostProcessPass>>(currentScene->scene, "post_process");
+                        if (i >= newPasses.size() || !newPasses[i].shader.empty()){
+                            Backend::getApp().registerAlert("Error", "The pass no longer uses the built-in shader.");
+                            return;
+                        }
+                        // the fork writes the files and points the pass at them in one step
+                        auto makePropertyCmd = [this, sceneId, i, newPasses](const std::string& forkBase) mutable {
+                            newPasses[i].shader = forkBase;
+                            return std::make_unique<ScenePropertyCmd<std::vector<PostProcessPass>>>(
+                                project, sceneId, "post_process", newPasses);
+                        };
+                        commitShaderFork(sceneId, std::make_unique<ForkShaderCmd>(
+                            project, ShaderType::POSTPROCESS, makePropertyCmd, directory, name, forkIncludes));
+                    });
+            };
+
+            drawShaderRowContents(ShaderType::POSTPROCESS, passes[i].shader, setShader, onFork, "post_process_" + std::to_string(i));
+
+            drawPostProcessUniforms(sceneId, passes, i);
+
+            ImGui::EndTable();
+        }
+
+        ImGui::PopID();
+    }
+
+    std::string addLabel = ICON_FA_PLUS " Add Pass##scene_post_process";
+    if (ImGui::Button(addLabel.c_str(), ImVec2(std::max(0.0f, ImGui::GetContentRegionAvail().x), 0))){
+        std::vector<PostProcessPass> newPasses = passes;
+        newPasses.push_back(PostProcessPass());
+        setPasses(newPasses);
+    }
+}
+
 void editor::Properties::drawShaderRowContents(ShaderType shaderType, const std::string& currentShader,
                                                const std::function<void(const std::string&)>& setShader,
                                                const std::function<void()>& onFork,
@@ -13172,6 +13392,13 @@ void editor::Properties::show(){
                 }
 
                 ImGui::EndTable();
+            }
+
+            // Ordered fullscreen passes run after the scene color (and SSR) pass; each one
+            // is a forked shader whose uniforms become rows here.
+            if (sceneProject->sceneType != SceneType::SCENE_UI) {
+                ImGui::SeparatorText("Post-processing");
+                drawScenePostProcess(sceneProject);
             }
 
             // Scene default shaders: used by components of each type whose customShader is

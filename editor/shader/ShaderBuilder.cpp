@@ -676,6 +676,9 @@ bool editor::ShaderBuilder::setupShaderArgs(shadercompiler::args_t& args, Shader
     }else if (shaderType == ShaderType::BLIT){
         args.vert_file = "fullscreen.vert";
         args.frag_file = "blit.frag";
+    }else if (shaderType == ShaderType::POSTPROCESS){
+        args.vert_file = "fullscreen.vert";
+        args.frag_file = "postprocess.frag";
     }else{
         return false;
     }

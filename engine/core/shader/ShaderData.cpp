@@ -224,15 +224,38 @@ int ShaderData::getUniformBlockIndex(UniformBlockType type){
         return -1;
     }
 
+    return getUniformBlockIndexByName(ustr);
+}
+
+int ShaderData::getUniformBlockIndexByName(const std::string& name){
     for (int s = 0; s < stages.size(); s++){
         for (int u = 0; u < stages[s].uniformblocks.size(); u++){
-            if (stages[s].uniformblocks[u].name == ustr){
+            if (stages[s].uniformblocks[u].name == name){
                 return stages[s].uniformblocks[u].slot;
             }
         }
     }
 
     return -1;
+}
+
+const std::vector<ShaderUniform>* ShaderData::getUniformBlockMembers(const std::string& name, unsigned int& sizeBytes){
+    for (int s = 0; s < stages.size(); s++){
+        for (int u = 0; u < stages[s].uniformblocks.size(); u++){
+            if (stages[s].uniformblocks[u].name == name){
+                sizeBytes = stages[s].uniformblocks[u].sizeBytes;
+                return &stages[s].uniformblocks[u].uniforms;
+            }
+        }
+    }
+
+    sizeBytes = 0;
+    return NULL;
+}
+
+std::string ShaderData::getUniformShortName(const std::string& name){
+    size_t dot = name.rfind('.');
+    return (dot == std::string::npos) ? name : name.substr(dot + 1);
 }
 
 int ShaderData::getStorageBufferIndex(StorageBufferType type){
@@ -326,6 +349,10 @@ std::pair<int, int> ShaderData::getTextureIndex(TextureShaderType type){
         return std::pair(-1, -1);
     }
 
+    return getTextureIndexByName(texstr);
+}
+
+std::pair<int, int> ShaderData::getTextureIndexByName(const std::string& texstr){
     for (int s = 0; s < stages.size(); s++){
         // get texture index
         int texIndex = -1;

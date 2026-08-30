@@ -305,6 +305,11 @@ namespace doriax::editor{
         // used by every component of that type whose customShader is empty.
         void drawSceneShaderRow(SceneProject* sceneProject, ShaderType shaderType, const char* scenePropertyName, const char* label);
 
+        // Ordered user post-process chain: per-pass enable, shader fork/pick, reorder
+        // and remove. Uniform rows come from the fork's own u_fs_postParams block.
+        void drawScenePostProcess(SceneProject* sceneProject);
+        void drawPostProcessUniforms(uint32_t sceneId, const std::vector<PostProcessPass>& passes, size_t index);
+
         // Commits a planned fork as one undoable step and opens the new .vert/.frag in the
         // code editor. Alerts instead when the plan is invalid or the files cannot be written.
         void commitShaderFork(uint32_t sceneId, std::unique_ptr<ForkShaderCmd> forkCmd);

@@ -365,6 +365,11 @@ namespace doriax::editor{
                     return scene->getDefaultLinesShader();
                 }
             }
+            else if (propertyName == "post_process") {
+                if constexpr (std::is_same_v<T, std::vector<PostProcessPass>>) {
+                    return scene->getPostProcessPasses();
+                }
+            }
 
             // Return default value if property not found
             if constexpr (std::is_same_v<T, Vector4>) return Vector4(0.0, 0.0, 0.0, 1.0);
@@ -377,6 +382,7 @@ namespace doriax::editor{
                 if constexpr (std::is_same_v<T, ShadowQuality>) return ShadowQuality::LOW;
             if constexpr (std::is_same_v<T, TextureFilter>) return TextureFilter::NEAREST;
             if constexpr (std::is_same_v<T, std::string>) return std::string();
+            if constexpr (std::is_same_v<T, std::vector<PostProcessPass>>) return std::vector<PostProcessPass>();
             // Add other types as needed
         }
 
@@ -482,6 +488,9 @@ namespace doriax::editor{
             }
             else if (propertyName == "default_lines_shader") {
                 if constexpr (std::is_same_v<T, std::string>) return d.defaultLinesShader;
+            }
+            else if (propertyName == "post_process") {
+                if constexpr (std::is_same_v<T, std::vector<PostProcessPass>>) return d.postProcess;
             }
 
             // Unknown property (or type mismatch): fall back to the type-generic default.
@@ -645,6 +654,11 @@ namespace doriax::editor{
             else if (propertyName == "default_lines_shader") {
                 if constexpr (std::is_same_v<T, std::string>) {
                     scene->setDefaultLinesShader(value);
+                }
+            }
+            else if (propertyName == "post_process") {
+                if constexpr (std::is_same_v<T, std::vector<PostProcessPass>>) {
+                    scene->setPostProcessPasses(value);
                 }
             }
         }

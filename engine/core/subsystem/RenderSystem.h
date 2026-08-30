@@ -373,7 +373,7 @@ namespace doriax{
 		int ssrSlotParams;
 		int ssrBlurSlotParams;
 		int compositeSlotParams;
-		bool ssrSwapchainRedirect;         // exported builds: composite targets the swapchain
+		bool swapchainRedirect;            // exported builds: the last pass targets the swapchain
 
 		// Fixed game resolution: when enabled on the Engine main scene (Scene
 		// fixedResolution settings), the main camera renders into
@@ -389,6 +389,33 @@ namespace doriax{
 		fs_blit_t fs_blit;
 		int blitSlotParams;
 
+		// User post-process chain: forked fullscreen shaders run after the color (and
+		// SSR) pass, ping-ponging between two buffers into the real destination.
+		struct PostProcessRuntime{
+			std::shared_ptr<ShaderRender> shader;
+			ObjectRender render;
+			uint16_t customId;                     // 0 = built-in passthrough
+			int slotParams;                        // -1 when the fork has no u_fs_postParams
+			std::vector<uint8_t> params;           // packed block, applied as raw bytes
+			std::pair<int, int> slotSceneColor;
+			std::pair<int, int> slotDepth;
+			std::pair<int, int> slotGBuffer;
+			std::pair<int, int> slotSSAO;
+			bool hasResolution;                    // members the engine writes per frame
+			bool hasTime;
+			ShaderUniform resolutionUniform;
+			ShaderUniform timeUniform;
+		};
+		bool postProcessLoaded;
+		bool postProcessNeedReload;
+		bool postProcessNeedsDepth;            // a pass samples the depth texture
+		bool postProcessNeedsGBuffer;          // a pass samples the G-buffer (needs SSR)
+		unsigned int postProcessWidth;
+		unsigned int postProcessHeight;
+		Framebuffer postProcessFramebuffer[2]; // ping-pong targets
+		CameraRender postProcessPassRender;    // drives the offscreen post passes
+		std::vector<PostProcessRuntime> postProcessPasses;
+
 		static void changeLoaded(void* data);
 		static void changeDestroy(void* data);
 
@@ -396,7 +423,7 @@ namespace doriax{
 		static bool samplesCameraTarget(const CameraComponent& camera, const Texture& texture);
 		bool isRenderingFlipped(const CameraComponent& camera) const;
 		bool isFixedResolutionActive() const;
-		void updateSSRSwapchainRedirect();
+		void updateSwapchainRedirect();
 		void updateMVP(size_t index, Transform& transform, CameraComponent& camera, Transform& cameraTransform);
 
 		void createEmptyTextures();
@@ -491,6 +518,13 @@ namespace doriax{
 		// upscales fixedResFramebuffer to the view rect
 		void renderFixedResolutionBlit();
 
+		// user post-process chain
+		void loadPostProcess();
+		void destroyPostProcess();
+		bool ensurePostProcessFramebuffers(unsigned int width, unsigned int height);
+		// runs the chain from ping-pong buffer 0 into destination (swapchain when null)
+		void renderPostProcess(FramebufferRender* destination);
+
 		bool drawUI(UIComponent& ui, Transform& transform, bool renderToTexture);
 		void destroyUI(Entity entity, UIComponent& ui);
 
@@ -557,6 +591,7 @@ namespace doriax{
 		void needReloadPoints();
 		void needReloadLines();
 		void needReloadMeshes();
+		void needReloadPostProcess();
 		void needReloadUIs();
 		void needReloadSky();
 		void prepareMeshForDataReload(Entity entity, MeshComponent& mesh);

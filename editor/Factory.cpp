@@ -2344,6 +2344,21 @@ std::string editor::Factory::createScene(int indentSpaces, Scene* scene, std::st
         out << ind2 << "scene->setDefaultPointsShader(" << formatString(scene->getDefaultPointsShader()) << ");\n";
     if (!scene->getDefaultLinesShader().empty())
         out << ind2 << "scene->setDefaultLinesShader(" << formatString(scene->getDefaultLinesShader()) << ");\n";
+    if (!scene->getPostProcessPasses().empty()) {
+        out << ind2 << "{\n";
+        out << ind3 << "std::vector<PostProcessPass> postProcess;\n";
+        for (const PostProcessPass& pass : scene->getPostProcessPasses()) {
+            out << ind3 << "postProcess.push_back({" << formatString(pass.shader) << ", " << formatBool(pass.enabled) << ", {";
+            for (size_t i = 0; i < pass.uniforms.size(); i++) {
+                if (i > 0)
+                    out << ", ";
+                out << "{" << formatString(pass.uniforms[i].first) << ", " << formatVector4(pass.uniforms[i].second) << "}";
+            }
+            out << "}});\n";
+        }
+        out << ind3 << "scene->setPostProcessPasses(postProcess);\n";
+        out << ind2 << "}\n";
+    }
     out << ind << "}\n";
 
     return out.str();

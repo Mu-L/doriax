@@ -2172,6 +2172,16 @@ YAML::Node editor::Stream::encodeScene(Scene* scene) {
     if (!scene->getDefaultLinesShader().empty())
         sceneNode["defaultLinesShader"] = scene->getDefaultLinesShader();
 
+    for (const PostProcessPass& pass : scene->getPostProcessPasses()) {
+        YAML::Node passNode;
+        passNode["shader"] = pass.shader;
+        passNode["enabled"] = pass.enabled;
+        for (const auto& uniform : pass.uniforms) {
+            passNode["uniforms"][uniform.first] = encodeVector4(uniform.second);
+        }
+        sceneNode["postProcess"].push_back(passNode);
+    }
+
     return sceneNode;
 }
 
@@ -2276,6 +2286,23 @@ Scene* editor::Stream::decodeScene(Scene* scene, const YAML::Node& node) {
     scene->setDefaultSkyShader(node["defaultSkyShader"] ? node["defaultSkyShader"].as<std::string>() : "");
     scene->setDefaultPointsShader(node["defaultPointsShader"] ? node["defaultPointsShader"].as<std::string>() : "");
     scene->setDefaultLinesShader(node["defaultLinesShader"] ? node["defaultLinesShader"].as<std::string>() : "");
+
+    // absent key clears the chain so decoding into a reused scene (play restore) is exact
+    std::vector<PostProcessPass> postProcess;
+    if (node["postProcess"]) {
+        for (const auto& passNode : node["postProcess"]) {
+            PostProcessPass pass;
+            pass.shader = passNode["shader"] ? passNode["shader"].as<std::string>() : "";
+            pass.enabled = passNode["enabled"] ? passNode["enabled"].as<bool>() : true;
+            if (passNode["uniforms"]) {
+                for (const auto& uniform : passNode["uniforms"]) {
+                    pass.uniforms.push_back({uniform.first.as<std::string>(), decodeVector4(uniform.second)});
+                }
+            }
+            postProcess.push_back(pass);
+        }
+    }
+    scene->setPostProcessPasses(postProcess);
 
     return scene;
 }

@@ -113,6 +113,16 @@ namespace doriax {
         int getStorageBufferIndex(StorageBufferType type);
         std::pair<int, int> getTextureIndex(TextureShaderType type);
 
+        // Same lookups by reflected name, for shaders whose bindings are not a fixed
+        // enum (user post-process passes). Missing names give -1.
+        int getUniformBlockIndexByName(const std::string& name);
+        std::pair<int, int> getTextureIndexByName(const std::string& name);
+
+        // block members, to build its byte blob by name
+        const std::vector<ShaderUniform>* getUniformBlockMembers(const std::string& name, unsigned int& sizeBytes);
+        // members are reflected as "instance.member"; the short name is what is stored
+        static std::string getUniformShortName(const std::string& name);
+
         void releaseSourceData();
     };
 

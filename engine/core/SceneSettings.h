@@ -9,6 +9,7 @@
 #include "math/Vector3.h"
 #include "math/Vector4.h"
 #include <string>
+#include <vector>
 
 namespace doriax{
 
@@ -27,6 +28,15 @@ namespace doriax{
         LOW,
         MEDIUM,
         HIGH
+    };
+
+    // One user post-process pass: a forked fullscreen shader run after the scene color.
+    // Uniforms are keyed by the name reflected from the shader's u_fs_postParams block,
+    // so a renamed or removed member just drops and an unset one stays zero.
+    struct PostProcessPass {
+        std::string shader; // project-relative fork base, empty = built-in passthrough
+        bool enabled = true;
+        std::vector<std::pair<std::string, Vector4>> uniforms;
     };
 
     // Plain-data scene configuration whose member initializers are the engine's factory
@@ -81,6 +91,9 @@ namespace doriax{
         std::string defaultSkyShader;
         std::string defaultPointsShader;
         std::string defaultLinesShader;
+
+        // ordered user post-process chain (main camera only), applied after SSR
+        std::vector<PostProcessPass> postProcess;
     };
 
 }

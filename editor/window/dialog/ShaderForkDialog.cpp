@@ -28,6 +28,7 @@ const char* ShaderForkDialog::shaderTypeName(ShaderType shaderType) {
         case ShaderType::POINTS: return "Points";
         case ShaderType::LINES:  return "Lines";
         case ShaderType::SKYBOX: return "Sky";
+        case ShaderType::POSTPROCESS: return "Post-process";
         default:                 return "Unknown";
     }
 }

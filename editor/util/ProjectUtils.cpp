@@ -139,6 +139,7 @@ std::string shaderTypeFileName(ShaderType shaderType) {
         case ShaderType::POINTS: return "points";
         case ShaderType::LINES:  return "lines";
         case ShaderType::SKYBOX: return "sky";
+        case ShaderType::POSTPROCESS: return "postprocess";
         default:                 return "";
     }
 }
@@ -259,7 +260,9 @@ editor::ProjectUtils::ShaderForkPlan editor::ProjectUtils::prepareShaderFork(
 
     std::filesystem::path projectRoot = project->getProjectPath();
 
-    auto vertIt = editor::shaderMap.find(typeFile + ".vert");
+    // fullscreen passes share one vertex entry point; the fork still gets its own copy
+    std::string vertFile = (shaderType == ShaderType::POSTPROCESS) ? "fullscreen" : typeFile;
+    auto vertIt = editor::shaderMap.find(vertFile + ".vert");
     auto fragIt = editor::shaderMap.find(typeFile + ".frag");
     if (vertIt == editor::shaderMap.end() || fragIt == editor::shaderMap.end()) {
         plan.error = "The built-in shader source is unavailable.";

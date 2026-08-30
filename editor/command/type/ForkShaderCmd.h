@@ -8,6 +8,7 @@
 #include "ecs/Entity.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -32,6 +33,13 @@ namespace doriax::editor {
         // scene-level variant: sets a scene default shader property (e.g. "default_mesh_shader")
         ForkShaderCmd(Project* project, SceneProject* sceneProject, ShaderType shaderType,
                       const std::string& scenePropertyName,
+                      const std::filesystem::path& targetDirRel,
+                      const std::string& baseName, bool forkIncludes = false);
+
+        // generic variant: the caller builds the command that points a property at the
+        // fork, given its base path (the post-process shader lives inside a list value)
+        ForkShaderCmd(Project* project, ShaderType shaderType,
+                      const std::function<std::unique_ptr<Command>(const std::string&)>& makePropertyCmd,
                       const std::filesystem::path& targetDirRel,
                       const std::string& baseName, bool forkIncludes = false);
 
