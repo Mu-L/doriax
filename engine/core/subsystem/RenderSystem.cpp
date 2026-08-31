@@ -1149,7 +1149,6 @@ void RenderSystem::updateReflectionProbes(double dt){
             runtime.observedCaptureRevision = probe.captureRevision;
             runtime.captureInProgress = false;
             runtime.nextFace = 0;
-            runtime.ready = false;
         }
 
         auto scheduleCapture = [&](){
@@ -1157,7 +1156,10 @@ void RenderSystem::updateReflectionProbes(double dt){
                 return;
             if (!runtime.captureInProgress){
                 runtime.captureInProgress = true;
-                runtime.ready = false;
+                // A finished cube keeps being sampled while its faces are
+                // rewritten. Only the first capture leaves the probe unselectable.
+                if (!runtime.captureFramebuffer.isCreated())
+                    runtime.ready = false;
                 runtime.nextFace = 0;
                 // Freeze the entity origin for all six faces. boxOffset controls
                 // only the influence volume and is intentionally not a capture offset.
