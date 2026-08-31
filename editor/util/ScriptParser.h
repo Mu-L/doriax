@@ -14,7 +14,8 @@ namespace doriax::editor {
     class ScriptParser {
     private:
         static doriax::ScriptPropertyType inferTypeFromCppType(const std::string& cppType, std::string& ptrTypeName);
-        static doriax::ScriptPropertyType parseExplicitType(const std::string& typeStr, const std::string& cppType);
+        // nullopt falls back to the inferred C++ type
+        static std::optional<doriax::ScriptPropertyType> parseExplicitType(const std::string& typeStr, const std::string& cppType);
         static std::string removeComments(const std::string& content);
         static std::optional<std::string> findScriptClassNameFromString(const std::string& content);
 

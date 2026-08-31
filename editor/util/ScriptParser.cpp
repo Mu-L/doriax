@@ -113,7 +113,7 @@ ScriptPropertyType editor::ScriptParser::inferTypeFromCppType(const std::string&
     return ScriptPropertyType::Int;
 }
 
-ScriptPropertyType editor::ScriptParser::parseExplicitType(const std::string& typeStr, const std::string& cppType) {
+std::optional<ScriptPropertyType> editor::ScriptParser::parseExplicitType(const std::string& typeStr, const std::string& cppType) {
     std::string cleanType = typeStr;
     cleanType.erase(std::remove_if(cleanType.begin(), cleanType.end(), ::isspace), cleanType.end());
 
@@ -153,7 +153,7 @@ ScriptPropertyType editor::ScriptParser::parseExplicitType(const std::string& ty
     }
 
     Out::warning("Unknown explicit type '%s', will fall back to inferred type", typeStr.c_str());
-    return ScriptPropertyType::Int; // Placeholder, will be overridden
+    return std::nullopt;
 }
 
 std::string editor::ScriptParser::removeComments(const std::string& content) {
@@ -345,12 +345,24 @@ std::vector<ScriptProperty> editor::ScriptParser::parseScriptPropertiesFromStrin
         std::string ptrTypeName;
 
         // Priority: explicit type parameter > type annotation > inferred from C++ type
+        std::optional<ScriptPropertyType> declaredType;
         if (!explicitType.empty()) {
-            type = parseExplicitType(explicitType, cppType);
+            declaredType = parseExplicitType(explicitType, cppType);
         } else if (!typeAnnotation.empty()) {
-            type = parseExplicitType(typeAnnotation, cppType);
+            declaredType = parseExplicitType(typeAnnotation, cppType);
+        }
+        if (declaredType) {
+            type = *declaredType;
         } else {
             type = inferTypeFromCppType(cppType, ptrTypeName);
+        }
+
+        // nullptr only means something on a pointer, stoi/stof would just throw on it
+        if ((defaultValueStr == "nullptr" || defaultValueStr == "NULL") &&
+            type != ScriptPropertyType::EntityReference) {
+            Out::warning("Property '%s' in %s is not a pointer, ignoring its %s default value",
+                         varName.c_str(), sourceName.c_str(), defaultValueStr.c_str());
+            defaultValueStr.clear();
         }
 
         ScriptProperty prop;

@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: MIT
 
 #include "ScriptProperty.h"
+#include "Log.h"
 #include "LuaBinding.h"
 #include "lua.hpp"
 #include "LuaBridge.h"
 
 namespace doriax {
+
+    void ScriptProperty::reportStaleValue() const {
+        Log::warn("Script property '%s' had a value of another type, reset to default", name.c_str());
+    }
 
     void ScriptProperty::syncToMember() {
         if (memberPtr) {

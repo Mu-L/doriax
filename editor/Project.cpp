@@ -140,47 +140,64 @@ static bool scriptPropertyFloatEqual(float lhs, float rhs, bool useTolerance) {
     return useTolerance && std::fabs(lhs - rhs) <= 1e-4f;
 }
 
+// A matching index only means both sides hold the same alternative, not that it is the
+// one type asks for, so a leftover pair compares unequal instead of throwing
 static bool scriptPropertyValuesEqual(ScriptPropertyType type, const ScriptPropertyValue& lhs, const ScriptPropertyValue& rhs, bool useTolerance = false) {
     if (lhs.index() != rhs.index()) {
         return false;
     }
 
     switch (type) {
-        case ScriptPropertyType::Bool:
-            return std::get<bool>(lhs) == std::get<bool>(rhs);
-        case ScriptPropertyType::Int:
-            return std::get<int>(lhs) == std::get<int>(rhs);
-        case ScriptPropertyType::Float:
-            return scriptPropertyFloatEqual(std::get<float>(lhs), std::get<float>(rhs), false);
-        case ScriptPropertyType::String:
-            return std::get<std::string>(lhs) == std::get<std::string>(rhs);
+        case ScriptPropertyType::Bool: {
+            const bool* a = std::get_if<bool>(&lhs);
+            const bool* b = std::get_if<bool>(&rhs);
+            return a && b && *a == *b;
+        }
+        case ScriptPropertyType::Int: {
+            const int* a = std::get_if<int>(&lhs);
+            const int* b = std::get_if<int>(&rhs);
+            return a && b && *a == *b;
+        }
+        case ScriptPropertyType::Float: {
+            const float* a = std::get_if<float>(&lhs);
+            const float* b = std::get_if<float>(&rhs);
+            return a && b && scriptPropertyFloatEqual(*a, *b, false);
+        }
+        case ScriptPropertyType::String: {
+            const std::string* a = std::get_if<std::string>(&lhs);
+            const std::string* b = std::get_if<std::string>(&rhs);
+            return a && b && *a == *b;
+        }
         case ScriptPropertyType::Vector2: {
-            const Vector2& a = std::get<Vector2>(lhs);
-            const Vector2& b = std::get<Vector2>(rhs);
-            return scriptPropertyFloatEqual(a.x, b.x, useTolerance) &&
-                scriptPropertyFloatEqual(a.y, b.y, useTolerance);
+            const Vector2* a = std::get_if<Vector2>(&lhs);
+            const Vector2* b = std::get_if<Vector2>(&rhs);
+            return a && b &&
+                scriptPropertyFloatEqual(a->x, b->x, useTolerance) &&
+                scriptPropertyFloatEqual(a->y, b->y, useTolerance);
         }
         case ScriptPropertyType::Vector3:
         case ScriptPropertyType::Color3: {
-            const Vector3& a = std::get<Vector3>(lhs);
-            const Vector3& b = std::get<Vector3>(rhs);
-            return scriptPropertyFloatEqual(a.x, b.x, useTolerance) &&
-                scriptPropertyFloatEqual(a.y, b.y, useTolerance) &&
-                scriptPropertyFloatEqual(a.z, b.z, useTolerance);
+            const Vector3* a = std::get_if<Vector3>(&lhs);
+            const Vector3* b = std::get_if<Vector3>(&rhs);
+            return a && b &&
+                scriptPropertyFloatEqual(a->x, b->x, useTolerance) &&
+                scriptPropertyFloatEqual(a->y, b->y, useTolerance) &&
+                scriptPropertyFloatEqual(a->z, b->z, useTolerance);
         }
         case ScriptPropertyType::Vector4:
         case ScriptPropertyType::Color4: {
-            const Vector4& a = std::get<Vector4>(lhs);
-            const Vector4& b = std::get<Vector4>(rhs);
-            return scriptPropertyFloatEqual(a.x, b.x, useTolerance) &&
-                scriptPropertyFloatEqual(a.y, b.y, useTolerance) &&
-                scriptPropertyFloatEqual(a.z, b.z, useTolerance) &&
-                scriptPropertyFloatEqual(a.w, b.w, useTolerance);
+            const Vector4* a = std::get_if<Vector4>(&lhs);
+            const Vector4* b = std::get_if<Vector4>(&rhs);
+            return a && b &&
+                scriptPropertyFloatEqual(a->x, b->x, useTolerance) &&
+                scriptPropertyFloatEqual(a->y, b->y, useTolerance) &&
+                scriptPropertyFloatEqual(a->z, b->z, useTolerance) &&
+                scriptPropertyFloatEqual(a->w, b->w, useTolerance);
         }
         case ScriptPropertyType::EntityReference: {
-            const EntityReference& lhsRef = std::get<EntityReference>(lhs);
-            const EntityReference& rhsRef = std::get<EntityReference>(rhs);
-            return lhsRef.entity == rhsRef.entity;
+            const EntityReference* a = std::get_if<EntityReference>(&lhs);
+            const EntityReference* b = std::get_if<EntityReference>(&rhs);
+            return a && b && a->entity == b->entity;
         }
     }
 

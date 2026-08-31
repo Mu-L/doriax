@@ -2674,41 +2674,42 @@ YAML::Node editor::Stream::encodeScriptProperty(const ScriptProperty& prop) {
         node["ptrTypeName"] = prop.ptrTypeName;
     }
 
+    // getValue falls back to the type default instead of throwing on a stale value
     switch (prop.type) {
         case ScriptPropertyType::Bool:
-            node["value"] = std::get<bool>(prop.value);
-            node["defaultValue"] = std::get<bool>(prop.defaultValue);
+            node["value"] = prop.getValue<bool>();
+            node["defaultValue"] = prop.getDefaultValue<bool>();
             break;
         case ScriptPropertyType::Int:
-            node["value"] = std::get<int>(prop.value);
-            node["defaultValue"] = std::get<int>(prop.defaultValue);
+            node["value"] = prop.getValue<int>();
+            node["defaultValue"] = prop.getDefaultValue<int>();
             break;
         case ScriptPropertyType::Float:
-            node["value"] = std::get<float>(prop.value);
-            node["defaultValue"] = std::get<float>(prop.defaultValue);
+            node["value"] = prop.getValue<float>();
+            node["defaultValue"] = prop.getDefaultValue<float>();
             break;
         case ScriptPropertyType::String:
-            node["value"] = std::get<std::string>(prop.value);
-            node["defaultValue"] = std::get<std::string>(prop.defaultValue);
+            node["value"] = prop.getValue<std::string>();
+            node["defaultValue"] = prop.getDefaultValue<std::string>();
             break;
         case ScriptPropertyType::Vector2:
-            node["value"] = encodeVector2(std::get<Vector2>(prop.value));
-            node["defaultValue"] = encodeVector2(std::get<Vector2>(prop.defaultValue));
+            node["value"] = encodeVector2(prop.getValue<Vector2>());
+            node["defaultValue"] = encodeVector2(prop.getDefaultValue<Vector2>());
             break;
         case ScriptPropertyType::Vector3:
         case ScriptPropertyType::Color3:
-            node["value"] = encodeVector3(std::get<Vector3>(prop.value));
-            node["defaultValue"] = encodeVector3(std::get<Vector3>(prop.defaultValue));
+            node["value"] = encodeVector3(prop.getValue<Vector3>());
+            node["defaultValue"] = encodeVector3(prop.getDefaultValue<Vector3>());
             break;
         case ScriptPropertyType::Vector4:
         case ScriptPropertyType::Color4:
-            node["value"] = encodeVector4(std::get<Vector4>(prop.value));
-            node["defaultValue"] = encodeVector4(std::get<Vector4>(prop.defaultValue));
+            node["value"] = encodeVector4(prop.getValue<Vector4>());
+            node["defaultValue"] = encodeVector4(prop.getDefaultValue<Vector4>());
             break;
         case ScriptPropertyType::EntityReference: {
-            const auto& entRef = std::get<EntityReference>(prop.value);
+            const EntityReference entRef = prop.getValue<EntityReference>();
             node["value"] = entRef.entity;
-            node["defaultValue"] = std::get<EntityReference>(prop.defaultValue).entity;
+            node["defaultValue"] = prop.getDefaultValue<EntityReference>().entity;
             if (entRef.sceneId != 0) {
                 node["sceneId"] = entRef.sceneId;
             }

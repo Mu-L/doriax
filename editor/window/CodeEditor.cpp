@@ -849,9 +849,11 @@ void editor::CodeEditor::insertLuaEntityProperty(EditorInstance& instance, Entit
             if (scriptEntry.type != ScriptType::LUA) continue;
             if (project->resolveLuaPath(scriptEntry.path) != resolveFilepath(instance.filepath)) continue;
 
-            // Find the newly added property by name
+            // Find the newly added property by name, a same-named property of another
+            // type is not the one just inserted
             for (size_t pi = 0; pi < scriptEntry.properties.size(); pi++) {
-                if (scriptEntry.properties[pi].name == varName) {
+                if (scriptEntry.properties[pi].name == varName &&
+                    scriptEntry.properties[pi].type == ScriptPropertyType::EntityReference) {
                     // Set EntityReference value
                     std::vector<ScriptEntry> newScripts = scriptComp->scripts;
                     newScripts[si].properties[pi].value = EntityReference{entity, storedSceneId};
@@ -947,11 +949,12 @@ void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entit
     {
         std::string baseName = varName;
         int suffix = 2;
-        // Check for existing "Type* varName" patterns
-        while (headerText.find("* " + varName + " ") != std::string::npos ||
-               headerText.find("* " + varName + "=") != std::string::npos ||
-               headerText.find("*" + varName + " ") != std::string::npos ||
-               headerText.find("*" + varName + "=") != std::string::npos) {
+        // Any member or method already using the name: a duplicate property is what
+        // makes the entity reference land on the wrong one
+        auto nameTaken = [&headerText](const std::string& name) {
+            return std::regex_search(headerText, std::regex(R"([\s*])" + name + R"(\s*(?:=|;|\{|\[|\())"));
+        };
+        while (nameTaken(varName)) {
             varName = baseName + std::to_string(suffix++);
         }
     }
@@ -1113,7 +1116,8 @@ void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entit
                 for (size_t nsi = 0; nsi < newScripts.size(); nsi++) {
                     if (newScripts[nsi].headerPath != headerPath.string()) continue;
                     for (size_t pi = 0; pi < newScripts[nsi].properties.size(); pi++) {
-                        if (newScripts[nsi].properties[pi].name == varName) {
+                        if (newScripts[nsi].properties[pi].name == varName &&
+                            newScripts[nsi].properties[pi].type == ScriptPropertyType::EntityReference) {
                             newScripts[nsi].properties[pi].value = EntityReference{entity, storedSceneId};
                             break;
                         }

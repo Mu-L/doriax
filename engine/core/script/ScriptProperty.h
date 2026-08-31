@@ -60,7 +60,7 @@ namespace doriax {
     struct DORIAX_API ScriptProperty {
         std::string name;
         std::string displayName;
-        ScriptPropertyType type;
+        ScriptPropertyType type = ScriptPropertyType::Bool;
         ScriptPropertyValue value;
         ScriptPropertyValue defaultValue;
 
@@ -80,10 +80,39 @@ namespace doriax {
             return T{};
         }
 
+        // Helper template to get typed default value
+        template<typename T>
+        T getDefaultValue() const {
+            if (std::holds_alternative<T>(defaultValue)) {
+                return std::get<T>(defaultValue);
+            }
+            return T{};
+        }
+
         // Helper template to set typed value
         template<typename T>
         void setValue(const T& val) {
             value = val;
+        }
+
+        // Value the caller can write through. A value left from the type the property
+        // had before is replaced, std::get on it would throw
+        template<typename T>
+        T& valueRef() {
+            if (!std::holds_alternative<T>(value)) {
+                reportStaleValue();
+                value = T{};
+            }
+            return std::get<T>(value);
+        }
+
+        template<typename T>
+        T& defaultValueRef() {
+            if (!std::holds_alternative<T>(defaultValue)) {
+                reportStaleValue();
+                defaultValue = T{};
+            }
+            return std::get<T>(defaultValue);
         }
 
         // Synchronize the stored value to the actual member variable
@@ -91,6 +120,9 @@ namespace doriax {
 
         // Synchronize from the actual member variable to the stored value
         void syncFromMember();
+
+    private:
+        void reportStaleValue() const;
     };
 
 }

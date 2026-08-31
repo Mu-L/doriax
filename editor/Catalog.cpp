@@ -801,38 +801,38 @@ namespace {
 
                 switch (prop.type) {
                     case ScriptPropertyType::Bool:
-                        result.ref = const_cast<bool*>(&std::get<bool>(prop.value));
-                        result.def = const_cast<bool*>(&std::get<bool>(prop.defaultValue));
+                        result.ref = &prop.valueRef<bool>();
+                        result.def = &prop.defaultValueRef<bool>();
                         break;
                     case ScriptPropertyType::Int:
-                        result.ref = const_cast<int*>(&std::get<int>(prop.value));
-                        result.def = const_cast<int*>(&std::get<int>(prop.defaultValue));
+                        result.ref = &prop.valueRef<int>();
+                        result.def = &prop.defaultValueRef<int>();
                         break;
                     case ScriptPropertyType::Float:
-                        result.ref = const_cast<float*>(&std::get<float>(prop.value));
-                        result.def = const_cast<float*>(&std::get<float>(prop.defaultValue));
+                        result.ref = &prop.valueRef<float>();
+                        result.def = &prop.defaultValueRef<float>();
                         break;
                     case ScriptPropertyType::String:
-                        result.ref = const_cast<std::string*>(&std::get<std::string>(prop.value));
-                        result.def = const_cast<std::string*>(&std::get<std::string>(prop.defaultValue));
+                        result.ref = &prop.valueRef<std::string>();
+                        result.def = &prop.defaultValueRef<std::string>();
                         break;
                     case ScriptPropertyType::Vector2:
-                        result.ref = const_cast<Vector2*>(&std::get<Vector2>(prop.value));
-                        result.def = const_cast<Vector2*>(&std::get<Vector2>(prop.defaultValue));
+                        result.ref = &prop.valueRef<Vector2>();
+                        result.def = &prop.defaultValueRef<Vector2>();
                         break;
                     case ScriptPropertyType::Vector3:
                     case ScriptPropertyType::Color3:
-                        result.ref = const_cast<Vector3*>(&std::get<Vector3>(prop.value));
-                        result.def = const_cast<Vector3*>(&std::get<Vector3>(prop.defaultValue));
+                        result.ref = &prop.valueRef<Vector3>();
+                        result.def = &prop.defaultValueRef<Vector3>();
                         break;
                     case ScriptPropertyType::Vector4:
                     case ScriptPropertyType::Color4:
-                        result.ref = const_cast<Vector4*>(&std::get<Vector4>(prop.value));
-                        result.def = const_cast<Vector4*>(&std::get<Vector4>(prop.defaultValue));
+                        result.ref = &prop.valueRef<Vector4>();
+                        result.def = &prop.defaultValueRef<Vector4>();
                         break;
                     case ScriptPropertyType::EntityReference:
-                        result.ref = const_cast<Entity*>(&std::get<EntityReference>(prop.value).entity);
-                        result.def = const_cast<Entity*>(&std::get<EntityReference>(prop.defaultValue).entity);
+                        result.ref = &prop.valueRef<EntityReference>().entity;
+                        result.def = &prop.defaultValueRef<EntityReference>().entity;
                         break;
                     default:
                         result.ref = nullptr;
@@ -847,7 +847,7 @@ namespace {
                 std::string sceneIdField = prop.name + ".sceneId";
                 if (fieldName == sceneIdField) {
                     static uint32_t defSceneId = 0;
-                    return {PropertyType::UInt, UpdateFlags_None, (void*)&defSceneId, (void*)&std::get<EntityReference>(prop.value).sceneId};
+                    return {PropertyType::UInt, UpdateFlags_None, (void*)&defSceneId, (void*)&prop.valueRef<EntityReference>().sceneId};
                 }
             }
         }
@@ -2413,38 +2413,38 @@ namespace {
 
                     switch (prop.type) {
                         case ScriptPropertyType::Bool:
-                            propData.ref = &std::get<bool>(prop.value);
-                            propData.def = &std::get<bool>(prop.defaultValue);
+                            propData.ref = &prop.valueRef<bool>();
+                            propData.def = &prop.defaultValueRef<bool>();
                             break;
                         case ScriptPropertyType::Int:
-                            propData.ref = &std::get<int>(prop.value);
-                            propData.def = &std::get<int>(prop.defaultValue);
+                            propData.ref = &prop.valueRef<int>();
+                            propData.def = &prop.defaultValueRef<int>();
                             break;
                         case ScriptPropertyType::Float:
-                            propData.ref = &std::get<float>(prop.value);
-                            propData.def = &std::get<float>(prop.defaultValue);
+                            propData.ref = &prop.valueRef<float>();
+                            propData.def = &prop.defaultValueRef<float>();
                             break;
                         case ScriptPropertyType::String:
-                            propData.ref = &std::get<std::string>(prop.value);
-                            propData.def = &std::get<std::string>(prop.defaultValue);
+                            propData.ref = &prop.valueRef<std::string>();
+                            propData.def = &prop.defaultValueRef<std::string>();
                             break;
                         case ScriptPropertyType::Vector2:
-                            propData.ref = &std::get<Vector2>(prop.value);
-                            propData.def = &std::get<Vector2>(prop.defaultValue);
+                            propData.ref = &prop.valueRef<Vector2>();
+                            propData.def = &prop.defaultValueRef<Vector2>();
                             break;
                         case ScriptPropertyType::Vector3:
                         case ScriptPropertyType::Color3:
-                            propData.ref = &std::get<Vector3>(prop.value);
-                            propData.def = &std::get<Vector3>(prop.defaultValue);
+                            propData.ref = &prop.valueRef<Vector3>();
+                            propData.def = &prop.defaultValueRef<Vector3>();
                             break;
                         case ScriptPropertyType::Vector4:
                         case ScriptPropertyType::Color4:
-                            propData.ref = &std::get<Vector4>(prop.value);
-                            propData.def = &std::get<Vector4>(prop.defaultValue);
+                            propData.ref = &prop.valueRef<Vector4>();
+                            propData.def = &prop.defaultValueRef<Vector4>();
                             break;
                         case ScriptPropertyType::EntityReference:
-                            propData.ref = &std::get<EntityReference>(prop.value).entity;
-                            propData.def = &std::get<EntityReference>(prop.defaultValue).entity;
+                            propData.ref = &prop.valueRef<EntityReference>().entity;
+                            propData.def = &prop.defaultValueRef<EntityReference>().entity;
                             break;
                         default:
                             propData.ref = nullptr;
@@ -2458,7 +2458,7 @@ namespace {
                     if (prop.type == ScriptPropertyType::EntityReference) {
                         static uint32_t defSceneId = 0;
                         std::string sceneIdKey = key + ".sceneId";
-                        ps[sceneIdKey] = {PropertyType::UInt, UpdateFlags_None, (void*)&defSceneId, (void*)&std::get<EntityReference>(prop.value).sceneId};
+                        ps[sceneIdKey] = {PropertyType::UInt, UpdateFlags_None, (void*)&defSceneId, (void*)&prop.valueRef<EntityReference>().sceneId};
                     }
                 }
             }
@@ -3543,6 +3543,13 @@ uint64_t editor::Catalog::getChangedUpdateFlags(ComponentType compType, void* ol
 
         PropertyData& oldProp = it->second;
         if (!oldProp.ref || !newProp.ref) continue;
+
+        // A script property can change type between the two, the casts below would read
+        // the old value as the new type
+        if (oldProp.type != newProp.type) {
+            flags |= newProp.updateFlags;
+            continue;
+        }
 
         bool changed = false;
         switch (newProp.type) {
