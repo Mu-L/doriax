@@ -308,7 +308,17 @@ namespace doriax::editor{
         // Ordered user post-process chain: per-pass enable, shader fork/pick, reorder
         // and remove. Uniform rows come from the fork's own u_fs_postParams block.
         void drawScenePostProcess(SceneProject* sceneProject);
-        void drawPostProcessUniforms(uint32_t sceneId, const std::vector<PostProcessPass>& passes, size_t index);
+        // A pass's resolved shader. The pool lookup takes a lock, so it is done once per
+        // pass per frame and shared by the label column and the uniform rows.
+        struct PostProcessShader {
+            std::shared_ptr<ShaderRender> shader;
+            const std::vector<ShaderUniform>* members = nullptr;
+            bool buildFailed = false;
+        };
+        PostProcessShader resolvePostProcessShader(const PostProcessPass& pass);
+        float getPostProcessLabelSize(const PostProcessShader& resolved);
+        void drawPostProcessUniforms(uint32_t sceneId, const std::vector<PostProcessPass>& passes, size_t index,
+                                     const PostProcessShader& resolved);
 
         // Commits a planned fork as one undoable step and opens the new .vert/.frag in the
         // code editor. Alerts instead when the plan is invalid or the files cannot be written.

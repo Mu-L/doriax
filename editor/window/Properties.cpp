@@ -5076,28 +5076,58 @@ void editor::Properties::drawSceneShaderRow(SceneProject* sceneProject, ShaderTy
     drawShaderRowContents(shaderType, currentShader, setShader, onFork, scenePropertyName);
 }
 
-void editor::Properties::drawPostProcessUniforms(uint32_t sceneId, const std::vector<PostProcessPass>& passes, size_t index){
-    uint16_t customId = ShaderPool::registerCustomShader(passes[index].shader);
-    std::shared_ptr<ShaderRender> shader = ShaderPool::get(ShaderType::POSTPROCESS, 0, customId);
-    bool buildFailed = customId != 0 && ShaderPool::isShaderBuildFailed(ShaderType::POSTPROCESS, 0, customId);
+editor::Properties::PostProcessShader editor::Properties::resolvePostProcessShader(const PostProcessPass& pass){
+    PostProcessShader resolved;
 
-    if (buildFailed || !shader || !shader->isCreated()){
+    uint16_t customId = ShaderPool::registerCustomShader(pass.shader);
+    resolved.buildFailed = customId != 0 && ShaderPool::isShaderBuildFailed(ShaderType::POSTPROCESS, 0, customId);
+    resolved.shader = ShaderPool::get(ShaderType::POSTPROCESS, 0, customId);
+
+    if (!resolved.buildFailed && resolved.shader && resolved.shader->isCreated()){
+        unsigned int sizeBytes = 0;
+        resolved.members = resolved.shader->shaderData.getUniformBlockMembers("u_fs_postParams", sizeBytes);
+    }
+
+    return resolved;
+}
+
+// widest uniform name the pass declares, so the rows are not truncated to "Shader"
+float editor::Properties::getPostProcessLabelSize(const PostProcessShader& resolved){
+    // no reset arrow on these rows, so they only need getLabelSize's half-icon padding
+    float width = getLabelSize("Shader", false);
+    if (!resolved.members)
+        return width;
+
+    // measures the reflected name in place, so sizing the column allocates nothing
+    float padding = ImGui::CalcTextSize(ICON_FA_ROTATE_LEFT).x / 2.0f;
+    for (size_t m = 0; m < resolved.members->size(); m++){
+        const std::string& name = (*resolved.members)[m].name;
+        size_t dot = name.rfind('.');
+        const char* shortName = name.c_str() + (dot == std::string::npos ? 0 : dot + 1);
+        width = std::max(width, ImGui::CalcTextSize(shortName).x + padding);
+    }
+
+    return width;
+}
+
+void editor::Properties::drawPostProcessUniforms(uint32_t sceneId, const std::vector<PostProcessPass>& passes, size_t index,
+                                                const PostProcessShader& resolved){
+    if (resolved.buildFailed || !resolved.shader || !resolved.shader->isCreated()){
         if (!passes[index].shader.empty()){
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(1);
             // a failed fork keeps rendering, the runtime falls back to the built-in
-            ImGui::TextDisabled("%s", buildFailed ? "Shader failed to build" : "Building shader...");
+            ImGui::TextDisabled("%s", resolved.buildFailed ? "Shader failed to build" : "Building shader...");
         }
         return;
     }
 
-    unsigned int sizeBytes = 0;
-    const std::vector<ShaderUniform>* members = shader->shaderData.getUniformBlockMembers("u_fs_postParams", sizeBytes);
-    if (!members)
+    // compiled fine, the pass just declares no uniforms
+    if (!resolved.members)
         return;
 
-    for (size_t m = 0; m < members->size(); m++){
-        const ShaderUniform& uniform = (*members)[m];
+    for (size_t m = 0; m < resolved.members->size(); m++){
+        const ShaderUniform& uniform = (*resolved.members)[m];
         std::string name = ShaderData::getUniformShortName(uniform.name);
 
         // shown but not editable: RenderSystem rewrites these every frame
@@ -5187,8 +5217,9 @@ void editor::Properties::drawScenePostProcess(SceneProject* sceneProject){
             new ScenePropertyCmd<std::vector<PostProcessPass>>(project, sceneId, "post_process", value));
     };
 
-    ImGuiTableFlags tableFlags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchSame;
-    float iconWidth = ImGui::CalcTextSize(ICON_FA_TRASH_CAN).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    // not resizable: the label column is sized from the pass uniform names, and a saved
+    // width would freeze it at whatever was known while the shader was still compiling
+    ImGuiTableFlags tableFlags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame;
 
     for (size_t i = 0; i < passes.size(); i++){
         ImGui::PushID((int)i);
@@ -5202,10 +5233,16 @@ void editor::Properties::drawScenePostProcess(SceneProject* sceneProject){
         ImGui::SameLine();
         ImGui::Text("Pass %zu", i + 1);
 
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, ImGui::GetContentRegionAvail().x - iconWidth * 3.0f));
+        // same compact icon buttons as the shader row, right aligned on the header
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x / 3.0, ImGui::GetStyle().FramePadding.y / 2.0));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+
+        float iconsWidth = ImGui::CalcTextSize(ICON_FA_ARROW_UP).x + ImGui::CalcTextSize(ICON_FA_ARROW_DOWN).x +
+                ImGui::CalcTextSize(ICON_FA_TRASH_CAN).x + ImGui::GetStyle().FramePadding.x * 6.0f +
+                ImGui::GetStyle().ItemSpacing.x * 2.0f;
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, ImGui::GetContentRegionAvail().x - iconsWidth));
 
         ImGui::BeginDisabled(i == 0);
         if (ImGui::Button(ICON_FA_ARROW_UP"##pp_up")){
@@ -5214,6 +5251,8 @@ void editor::Properties::drawScenePostProcess(SceneProject* sceneProject){
             setPasses(newPasses);
         }
         ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Move the pass earlier in the chain");
 
         ImGui::SameLine();
         ImGui::BeginDisabled(i + 1 == passes.size());
@@ -5223,23 +5262,30 @@ void editor::Properties::drawScenePostProcess(SceneProject* sceneProject){
             setPasses(newPasses);
         }
         ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Move the pass later in the chain");
 
         ImGui::SameLine();
         bool removed = ImGui::Button(ICON_FA_TRASH_CAN"##pp_remove");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Remove the pass");
         if (removed){
             std::vector<PostProcessPass> newPasses = passes;
             newPasses.erase(newPasses.begin() + i);
             setPasses(newPasses);
         }
         ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar();
 
         if (removed){
             ImGui::PopID();
             break;
         }
 
+        PostProcessShader resolved = resolvePostProcessShader(passes[i]);
+
         if (ImGui::BeginTable("scene_post_process_pass_table", 2, tableFlags)){
-            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, getLabelSize("Shader"));
+            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, getPostProcessLabelSize(resolved));
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
             ImGui::TableNextRow();
@@ -5280,7 +5326,7 @@ void editor::Properties::drawScenePostProcess(SceneProject* sceneProject){
 
             drawShaderRowContents(ShaderType::POSTPROCESS, passes[i].shader, setShader, onFork, "post_process_" + std::to_string(i));
 
-            drawPostProcessUniforms(sceneId, passes, i);
+            drawPostProcessUniforms(sceneId, passes, i, resolved);
 
             ImGui::EndTable();
         }
