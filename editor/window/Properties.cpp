@@ -5777,7 +5777,7 @@ void editor::Properties::drawMeshComponent(ComponentType cpType, SceneProject* s
     }
 
     RowSettings iblSettings;
-    iblSettings.help = "Light this mesh with the scene's Sky environment (image-based lighting). Requires a Sky entity with a texture.";
+    iblSettings.help = "Light this mesh with image-based lighting, from the scene's Sky environment and from Reflection Probes. Sky lighting requires a Sky entity with a texture.";
     propertyRow(RowPropertyType::Bool, cpType, "receiveIBL", "Receive IBL", sceneProject, entities, iblSettings);
 
     propertyRow(RowPropertyType::Bool, cpType, "castShadows", "Cast Shadows", sceneProject, entities);

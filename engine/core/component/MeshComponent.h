@@ -178,7 +178,7 @@ namespace doriax{
         AABB skinnedAABB; // local bounds of the posed mesh, null when not skinned
 
         bool receiveLights = true;
-        bool receiveIBL = false; // image-based lighting from a sky environment
+        bool receiveIBL = false; // image-based lighting from a sky environment or a reflection probe
         bool castShadows = true;
         bool receiveShadows = true;
         bool shadowsBillboard = true;
