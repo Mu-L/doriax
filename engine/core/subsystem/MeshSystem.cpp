@@ -4625,6 +4625,25 @@ bool MeshSystem::loadGLTF(Entity entity, const std::string filename, bool asyncL
     return true;
 }
 
+// An OBJ index is -1 when the face omits that attribute, and a corrupt file can point past the array
+static bool objIndexInRange(int index, size_t elements, size_t arraySize){
+    return index >= 0 && (elements * static_cast<size_t>(index) + elements) <= arraySize;
+}
+
+static Vector3 objFaceNormal(const tinyobj::attrib_t& attrib, const std::vector<tinyobj::index_t>& indices, size_t offset, size_t numVertices){
+    if (numVertices < 3){
+        return Vector3::ZERO;
+    }
+
+    Vector3 corner[3];
+    for (size_t i = 0; i < 3; i++){
+        const int vertexIndex = indices[offset + i].vertex_index;
+        corner[i] = Vector3(attrib.vertices[3 * vertexIndex + 0], attrib.vertices[3 * vertexIndex + 1], attrib.vertices[3 * vertexIndex + 2]);
+    }
+
+    return (corner[1] - corner[0]).crossProduct(corner[2] - corner[0]).normalized();
+}
+
 bool MeshSystem::loadOBJ(Entity entity, const std::string filename, bool asyncLoad){
     const std::string poolKey = getModelFilenameKey(filename);
 
@@ -4809,6 +4828,8 @@ bool MeshSystem::loadOBJ(Entity entity, const std::string filename, bool asyncLo
     Attribute* attNormal = mesh.buffer.getAttribute(AttributeType::NORMAL);
     Attribute* attColor = mesh.buffer.getAttribute(AttributeType::COLOR);
 
+    size_t invalidFaces = 0;
+
     std::vector<std::vector<uint32_t>> indexMap;
     if (materials.size() > 0) {
         indexMap.resize(materials.size());
@@ -4831,43 +4852,62 @@ bool MeshSystem::loadOBJ(Entity entity, const std::string filename, bool asyncLo
             if (material_id < 0 || material_id >= static_cast<int>(indexMap.size()))
                 material_id = 0;
 
+            bool validFace = true;
+            bool missingNormals = false;
+            for (size_t v = 0; v < fnum; v++) {
+                const tinyobj::index_t& faceIdx = shapes[i].mesh.indices[index_offset + v];
+                if (!objIndexInRange(faceIdx.vertex_index, 3, attrib.vertices.size())) validFace = false;
+                if (!objIndexInRange(faceIdx.normal_index, 3, attrib.normals.size())) missingNormals = true;
+            }
+
+            // A face out of range would be a vertex at the origin, stretching the AABB and colliders
+            if (!validFace) {
+                invalidFaces++;
+                index_offset += fnum;
+                continue;
+            }
+
+            // Faces without their own normals are lit by the geometric one
+            const Vector3 faceNormal = missingNormals ? objFaceNormal(attrib, shapes[i].mesh.indices, index_offset, fnum) : Vector3::ZERO;
+
             // For each vertex in the face
             for (size_t v = 0; v < fnum; v++) {
                 tinyobj::index_t idx = shapes[i].mesh.indices[index_offset + v];
 
                 indexMap[material_id].push_back(mesh.buffer.getCount());
 
-                    mesh.buffer.addVector3(attVertex,
-                                        Vector3(attrib.vertices[3*idx.vertex_index+0],
-                                                attrib.vertices[3*idx.vertex_index+1],
-                                                attrib.vertices[3*idx.vertex_index+2]));
+                // Each attribute keeps its own count, so a missing value is written, never skipped
+                const bool hasTexcoord = objIndexInRange(idx.texcoord_index, 2, attrib.texcoords.size());
+                const bool hasNormal = objIndexInRange(idx.normal_index, 3, attrib.normals.size());
+                const bool hasColor = objIndexInRange(idx.vertex_index, 3, attrib.colors.size());
 
-                if (attrib.texcoords.size() > 0) {
-                        mesh.buffer.addVector2(attTexcoord,
-                                            Vector2(attrib.texcoords[2 * idx.texcoord_index + 0],
-                                                    1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]));
-                }
-                if (attrib.normals.size() > 0) {
-                        mesh.buffer.addVector3(attNormal,
-                                            Vector3(attrib.normals[3 * idx.normal_index + 0],
-                                                    attrib.normals[3 * idx.normal_index + 1],
-                                                    attrib.normals[3 * idx.normal_index + 2]));
-                }
+                mesh.buffer.addVector3(attVertex,
+                                    Vector3(attrib.vertices[3 * idx.vertex_index + 0],
+                                            attrib.vertices[3 * idx.vertex_index + 1],
+                                            attrib.vertices[3 * idx.vertex_index + 2]));
 
-                if (attrib.colors.size() > 0){
-                        mesh.buffer.addVector4(attColor,
-                                            Vector4(attrib.colors[3 * idx.vertex_index + 0],
-                                                    attrib.colors[3 * idx.vertex_index + 1],
-                                                    attrib.colors[3 * idx.vertex_index + 2],
-                                                    1.0));
-                }else{
-                        mesh.buffer.addVector4(attColor, Vector4(1.0, 1.0, 1.0, 1.0));
-                }
+                mesh.buffer.addVector2(attTexcoord, hasTexcoord ?
+                                    Vector2(attrib.texcoords[2 * idx.texcoord_index + 0],
+                                            1.0f - attrib.texcoords[2 * idx.texcoord_index + 1]) : Vector2::ZERO);
 
+                mesh.buffer.addVector3(attNormal, hasNormal ?
+                                    Vector3(attrib.normals[3 * idx.normal_index + 0],
+                                            attrib.normals[3 * idx.normal_index + 1],
+                                            attrib.normals[3 * idx.normal_index + 2]) : faceNormal);
+
+                mesh.buffer.addVector4(attColor, hasColor ?
+                                    Vector4(attrib.colors[3 * idx.vertex_index + 0],
+                                            attrib.colors[3 * idx.vertex_index + 1],
+                                            attrib.colors[3 * idx.vertex_index + 2],
+                                            1.0) : Vector4(1.0, 1.0, 1.0, 1.0));
             }
 
             index_offset += fnum;
         }
+    }
+
+    if (invalidFaces > 0) {
+        Log::warn("Model %s has %zu faces with out-of-range vertex indices, skipping them", filename.c_str(), invalidFaces);
     }
 
     if (asyncLoad) {
