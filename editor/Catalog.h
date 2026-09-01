@@ -178,6 +178,9 @@ namespace doriax::editor{
 
         static PropertyData getProperty(EntityRegistry* registry, Entity entity, ComponentType component, std::string propertyName);
 
+        // The same lookup without the not-found log, for callers a miss is expected on
+        static PropertyData findProperty(EntityRegistry* registry, Entity entity, ComponentType component, std::string propertyName);
+
         // Submesh::overrideFields of a "submeshes[N].<field>" property, null for anything else,
         // with propertyFields set to the bits that property occupies. A command ORs them in after
         // writing the value, and puts the whole mask back on undo.

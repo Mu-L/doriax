@@ -2215,6 +2215,14 @@ bool editor::Properties::propertyHeader(std::string label, float secondColSize, 
 bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType, std::string id, std::string label, SceneProject* sceneProject, std::vector<Entity> entities, RowSettings settings){
     bool result = true;
 
+    // Script properties and submesh fields are per entity, a selection may not share all of them
+    entities.erase(std::remove_if(entities.begin(), entities.end(), [&](Entity entity){
+        return !Catalog::findProperty(sceneProject->scene, entity, cpType, id).ref;
+    }), entities.end());
+    if (entities.empty()){
+        return false;
+    }
+
     constexpr float compThreshold = 1e-4;
     constexpr float zeroThreshold = 1e-4;
 
@@ -2223,7 +2231,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool different = false;
 
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             std::string value = formatPropertyLabelValue(prop);
             if (displayValue.empty()) {
                 displayValue = value;
@@ -2248,7 +2256,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         std::map<Entity, Vector2> eValue;
         float* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<float*>(prop.def);
             eValue[entity] = *static_cast<Vector2*>(prop.ref);
             if (value){
@@ -2373,7 +2381,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         std::map<Entity, Vector3> eValue;
         float* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<float*>(prop.def);
             eValue[entity] = *static_cast<Vector3*>(prop.ref);
             if (value){
@@ -2566,7 +2574,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         std::map<Entity, Vector4> eValue;
         float* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<float*>(prop.def);
             eValue[entity] = *static_cast<Vector4*>(prop.ref);
             if (value){
@@ -2747,7 +2755,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         Quaternion qValue;
         float* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<float*>(prop.def);
             qValue = *static_cast<Quaternion*>(prop.ref);
             eValue[entity] = getDisplayedEulerAngles(qValue, order, zeroThreshold);
@@ -2892,7 +2900,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         std::string* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<std::string*>(prop.def);
             eValue[entity] = *static_cast<std::string*>(prop.ref);
             if (value){
@@ -2945,7 +2953,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         bool* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<bool*>(prop.def);
             eValue[entity] = *static_cast<bool*>(prop.ref);
             if (value){
@@ -2991,7 +2999,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         float* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<float*>(prop.def);
             eValue[entity] = *static_cast<float*>(prop.ref);
             if (type == RowPropertyType::HalfCone){
@@ -3064,7 +3072,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         double* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<double*>(prop.def);
             eValue[entity] = *static_cast<double*>(prop.ref);
             if (value){
@@ -3118,7 +3126,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         unsigned int* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<unsigned int*>(prop.def);
             eValue[entity] = *static_cast<unsigned int*>(prop.ref);
             if (value){
@@ -3160,7 +3168,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         int* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<int*>(prop.def);
             eValue[entity] = *static_cast<int*>(prop.ref);
             if (value){
@@ -3207,7 +3215,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         float* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<float*>(prop.def);
             eValue[entity] = *static_cast<Vector3*>(prop.ref);
             if (value){
@@ -3250,7 +3258,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         float* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<float*>(prop.def);
             eValue[entity] = *static_cast<Vector4*>(prop.ref);
             if (value){
@@ -3294,7 +3302,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         void* defArr = nullptr;
         std::vector<int>* sliderValues = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = prop.def;
             sliderValues = settings.sliderValues;
             if (type == RowPropertyType::IntSlider) {
@@ -3369,7 +3377,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         int* defArr = nullptr;
         std::vector<EnumEntry>* enumEntries = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<int*>(prop.def);
             enumEntries = settings.enumEntries;
             eValue[entity] = *static_cast<int*>(prop.ref);
@@ -3437,7 +3445,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         Ease* defValue = nullptr;
         std::vector<EnumEntry>* enumEntries = settings.enumEntries ? settings.enumEntries : &entriesEaseType;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defValue = static_cast<Ease*>(prop.def);
             eValue[entity] = *static_cast<Ease*>(prop.ref);
             if (value){
@@ -3504,7 +3512,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         FontArray* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<FontArray*>(prop.def);
             eValue[entity] = *static_cast<FontArray*>(prop.ref);
             if (value){
@@ -3564,7 +3572,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         Texture* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<Texture*>(prop.def);
             eValue[entity] = *static_cast<Texture*>(prop.ref);
             if (value){
@@ -3757,7 +3765,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         Texture* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<Texture*>(prop.def);
             eValue[entity] = *static_cast<Texture*>(prop.ref);
             if (value){
@@ -4049,7 +4057,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         bool dif = false;
         Material* defArr = nullptr;
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defArr = static_cast<Material*>(prop.def);
             eValue[entity] = *static_cast<Material*>(prop.ref);
             if (value){
@@ -4223,7 +4231,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         auto restoreMatDropPreview = [&]() {
             if (matDropPreviewing) {
                 for (auto& [ent, origMat] : matDropOriginals) {
-                    PropertyData prop = Catalog::getProperty(sceneProject->scene, ent, cpType, matDropPropertyId);
+                    PropertyData prop = Catalog::findProperty(sceneProject->scene, ent, cpType, matDropPropertyId);
                     if (prop.ref) {
                         Material* matRef = static_cast<Material*>(prop.ref);
                         *matRef = origMat;
@@ -4280,13 +4288,13 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
                                         matDropOriginals.clear();
                                         matDropPropertyId = id;
                                         for (Entity& entity : entities) {
-                                            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+                                            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
                                             matDropOriginals[entity] = *static_cast<Material*>(prop.ref);
                                         }
                                         matDropPreviewing = true;
                                     }
                                     for (Entity& entity : entities) {
-                                        PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+                                        PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
                                         Material* matRef = static_cast<Material*>(prop.ref);
                                         if (*matRef != cachedMatDropMaterial) {
                                             *matRef = cachedMatDropMaterial;
@@ -4335,13 +4343,13 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
                                     matDropOriginals.clear();
                                     matDropPropertyId = id;
                                     for (Entity& entity : entities) {
-                                        PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+                                        PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
                                         matDropOriginals[entity] = *static_cast<Material*>(prop.ref);
                                     }
                                     matDropPreviewing = true;
                                 }
                                 for (Entity& entity : entities) {
-                                    PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+                                    PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
                                     Material* matRef = static_cast<Material*>(prop.ref);
                                     if (matRef->baseColorTexture != Texture(droppedImagePath)) {
                                         matRef->baseColorTexture = Texture(droppedImagePath);
@@ -4408,7 +4416,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         unsigned int* defVal = nullptr;
 
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defVal = static_cast<unsigned int*>(prop.def);
             eValue[entity] = *static_cast<unsigned int*>(prop.ref);
             if (value && *value != eValue[entity]){
@@ -4548,11 +4556,7 @@ bool editor::Properties::propertyRow(RowPropertyType type, ComponentType cpType,
         }
 
         for (Entity& entity : entities){
-            PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, id);
-            // rows come from the first selected entity, others may not have this property
-            if (!prop.ref) {
-                continue;
-            }
+            PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, id);
             defVal = static_cast<unsigned int*>(prop.def);
             eValue[entity] = *static_cast<unsigned int*>(prop.ref);
 
@@ -4756,7 +4760,7 @@ bool editor::Properties::propertyRowWithAutoButton(RowPropertyType propType, Com
             onValueChanged();
         }
         for (auto& entity : entities){
-            PropertyData autoProp = Catalog::getProperty(sceneProject->scene, entity, cpType, autoId);
+            PropertyData autoProp = Catalog::findProperty(sceneProject->scene, entity, cpType, autoId);
             bool* autoVal = static_cast<bool*>(autoProp.ref);
             if (autoVal && *autoVal) {
                 editor::MultiPropertyCmd* cmd = new editor::MultiPropertyCmd();
@@ -4776,8 +4780,8 @@ bool editor::Properties::propertyRowWithAutoButton(RowPropertyType propType, Com
     bool allAuto = true;
     bool anyAuto = false;
     for (auto& entity : entities){
-        PropertyData autoProp = Catalog::getProperty(sceneProject->scene, entity, cpType, autoId);
-        bool val = *static_cast<bool*>(autoProp.ref);
+        PropertyData autoProp = Catalog::findProperty(sceneProject->scene, entity, cpType, autoId);
+        bool val = autoProp.ref && *static_cast<bool*>(autoProp.ref);
         if (val) anyAuto = true;
         else allAuto = false;
     }
@@ -8186,9 +8190,11 @@ void editor::Properties::drawScriptComponent(ComponentType cpType, SceneProject*
                 break;
             }
             const ScriptEntry& otherScript = otherScriptComp.scripts[i];
+            // headerPath is where the properties come from, so entries not sharing it differ
             if (refScript.type != otherScript.type || 
                 refScript.className != otherScript.className || 
-                refScript.path != otherScript.path) {
+                refScript.path != otherScript.path ||
+                refScript.headerPath != otherScript.headerPath) {
                 isCommon = false;
                 break;
             }
@@ -10455,7 +10461,11 @@ void editor::Properties::drawBody3DComponent(ComponentType cpType, SceneProject*
         int shapeTypeValue = *static_cast<int*>(shapeTypeProp.ref);
         bool shapeTypeMixed = false;
         for (size_t entityIndex = 1; entityIndex < entities.size(); entityIndex++){
-            PropertyData otherShapeTypeProp = Catalog::getProperty(sceneProject->scene, entities[entityIndex], cpType, shapeKey + ".type");
+            PropertyData otherShapeTypeProp = Catalog::findProperty(sceneProject->scene, entities[entityIndex], cpType, shapeKey + ".type");
+            // shapes are counted from the first body, the others may have fewer
+            if (!otherShapeTypeProp.ref){
+                continue;
+            }
             if (*static_cast<int*>(otherShapeTypeProp.ref) != shapeTypeValue){
                 shapeTypeMixed = true;
                 break;
@@ -12209,7 +12219,11 @@ void editor::Properties::drawAnimationComponent(ComponentType cpType, SceneProje
             bool durDif = false;
             float* durDef = nullptr;
             for (Entity& entity : entities){
-                PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, cpType, durationId);
+                PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, cpType, durationId);
+                // frames are counted from the first entity, the others may have fewer
+                if (!prop.ref){
+                    continue;
+                }
                 durDef = static_cast<float*>(prop.def);
                 eDurValue[entity] = *static_cast<float*>(prop.ref);
                 if (durValue && *durValue != eDurValue[entity])

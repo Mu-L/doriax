@@ -4261,8 +4261,12 @@ void editor::Catalog::copyPropertyValue(EntityRegistry* sourceRegistry, Entity s
     updateEntity(targetRegistry, targetEntity, propIt->second.updateFlags);
 }
 
+editor::PropertyData editor::Catalog::findProperty(EntityRegistry* registry, Entity entity, ComponentType component, std::string propertyName){
+    return tryGetFastProperty(registry, entity, component, propertyName);
+}
+
 editor::PropertyData editor::Catalog::getProperty(EntityRegistry* registry, Entity entity, ComponentType component, std::string propertyName){
-    PropertyData fastProperty = tryGetFastProperty(registry, entity, component, propertyName);
+    PropertyData fastProperty = findProperty(registry, entity, component, propertyName);
     if (fastProperty.ref || fastProperty.def){
         return fastProperty;
     }

@@ -111,7 +111,7 @@ namespace doriax::editor{
                 return false;
             }
             for (auto& [entity, value] : values){
-                PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, type, propertyName);
+                PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, type, propertyName);
                 T* valueRef = static_cast<T*>(prop.ref);
                 // script properties are per entity, a selection may not share all of them
                 if (!valueRef){
@@ -161,7 +161,7 @@ namespace doriax::editor{
                 return;
             }
             for (auto const& [entity, value] : values){
-                PropertyData prop = Catalog::getProperty(sceneProject->scene, entity, type, propertyName);
+                PropertyData prop = Catalog::findProperty(sceneProject->scene, entity, type, propertyName);
                 T* valueRef = static_cast<T*>(prop.ref);
                 if (!valueRef){
                     continue;
