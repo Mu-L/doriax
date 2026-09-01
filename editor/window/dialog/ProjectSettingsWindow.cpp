@@ -10,6 +10,7 @@
 #include "external/IconsFontAwesome6.h"
 
 #include <algorithm>
+#include <cstring>
 
 namespace doriax::editor {
 
@@ -74,13 +75,31 @@ static void drawSettingsPanel(const char* panelId, DrawContents drawContents) {
     ImGui::PopStyleVar(3);
 }
 
-static void beginSettingsRow(const char* label, const char* tooltip = nullptr) {
+// Returns true when the reset arrow is clicked, like the property rows in Properties.
+static bool beginSettingsRow(const char* label, const char* tooltip = nullptr, bool defChanged = false) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
     if (tooltip) ImGui::SetItemTooltip("%s", tooltip);
+
+    bool reset = false;
+    if (defChanged) {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2, style.ItemSpacing.y));
+        ImGui::SameLine();
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, style.FramePadding.y));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Text, style.Colors[ImGuiCol_TextDisabled]);
+        reset = ImGui::Button((ICON_FA_ROTATE_LEFT "##" + std::string(label)).c_str());
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(3);
+        ImGui::SetItemTooltip("Restore default");
+    }
+
     ImGui::TableNextColumn();
+    return reset;
 }
 
 static void helpMarker(const char* desc) {
@@ -93,7 +112,10 @@ static void helpMarker(const char* desc) {
     }
 }
 
-static void drawCombo(const char* id, const char* const* names, int count, int& selectedIndex) {
+static void drawComboSetting(const char* label, const char* id, const char* const* names, int count, int& selectedIndex, int defaultIndex, const char* tooltip = nullptr) {
+    if (beginSettingsRow(label, tooltip, selectedIndex != defaultIndex)) {
+        selectedIndex = defaultIndex;
+    }
     if (selectedIndex < 0 || selectedIndex >= count) selectedIndex = 0;
 
     ImGui::SetNextItemWidth(-1);
@@ -107,8 +129,10 @@ static void drawCombo(const char* id, const char* const* names, int count, int& 
     ImGui::EndCombo();
 }
 
-static void drawIntSetting(const char* label, const char* id, int& value, int minValue = 1, const char* tooltip = nullptr) {
-    beginSettingsRow(label, tooltip);
+static void drawIntSetting(const char* label, const char* id, int& value, int defaultValue, int minValue = 1, const char* tooltip = nullptr) {
+    if (beginSettingsRow(label, tooltip, value != defaultValue)) {
+        value = defaultValue;
+    }
     ImGui::SetNextItemWidth(-1);
     ImGui::InputInt(id, &value);
     value = std::max(value, minValue);
@@ -124,7 +148,10 @@ static void drawDirectorySetting(
     const fs::path& defaultDirectory,
     bool keepAbsolutePathOnError = false
 ) {
-    beginSettingsRow(label, tooltip);
+    // An empty directory already means the default root
+    if (beginSettingsRow(label, tooltip, !directory.empty() && directory != defaultDirectory)) {
+        directory = defaultDirectory;
+    }
 
     const ImGuiStyle& style = ImGui::GetStyle();
     float browseWidth = ImGui::CalcTextSize("Browse").x + style.FramePadding.x * 2.0f;
@@ -157,9 +184,12 @@ static void drawDirectorySetting(
 }
 
 static void drawScriptDirsSetting(Project* project, std::vector<fs::path>& directories) {
-    beginSettingsRow("Script Directories",
-        "Extra C++ roots. Each one is an include directory, and the sources under it "
-        "are compiled without a script component referencing them.");
+    if (beginSettingsRow("Script Directories",
+            "Extra C++ roots. Each one is an include directory, and the sources under it "
+            "are compiled without a script component referencing them.",
+            !directories.empty())) {
+        directories.clear();
+    }
 
     const ImGuiStyle& style = ImGui::GetStyle();
     const float removeWidth = ImGui::CalcTextSize(ICON_FA_TRASH_CAN).x + style.FramePadding.x * 2.0f;
@@ -593,31 +623,35 @@ void ProjectSettingsWindow::drawGeneralSettings() {
 
 void ProjectSettingsWindow::drawCanvasSettings() {
     drawSettingsPanel("##CanvasSettingsPanel", [this]() {
-        drawIntSetting("Canvas Width", "##CanvasWidth", m_canvasWidth);
-        drawIntSetting("Canvas Height", "##CanvasHeight", m_canvasHeight);
+        drawIntSetting("Canvas Width", "##CanvasWidth", m_canvasWidth, (int)Project::defaultCanvasWidth);
+        drawIntSetting("Canvas Height", "##CanvasHeight", m_canvasHeight, (int)Project::defaultCanvasHeight);
 
-        beginSettingsRow("Scaling Mode");
-        drawCombo("##ScalingMode", scalingModeNames, scalingModeCount, m_scalingModeIndex);
+        drawComboSetting("Scaling Mode", "##ScalingMode", scalingModeNames, scalingModeCount, m_scalingModeIndex, findScalingIndex(Project::defaultScalingMode));
         ImGui::Spacing();
         drawScalingPreview(scalingModeValues[m_scalingModeIndex], m_canvasWidth, m_canvasHeight);
 
-        beginSettingsRow("Texture Strategy");
-        drawCombo("##TextureStrategy", textureStrategyNames, textureStrategyCount, m_textureStrategyIndex);
+        drawComboSetting("Texture Strategy", "##TextureStrategy", textureStrategyNames, textureStrategyCount, m_textureStrategyIndex, findTextureStrategyIndex(Project::defaultTextureStrategy));
     });
 }
 
 void ProjectSettingsWindow::drawWindowSettings() {
     drawSettingsPanel("##WindowSettingsPanel", [this]() {
-        beginSettingsRow("Window Mode", "Initial window state of desktop builds. Web and mobile ignore window settings.");
-        drawCombo("##WindowMode", windowModeNames, windowModeCount, m_windowModeIndex);
+        drawComboSetting("Window Mode", "##WindowMode", windowModeNames, windowModeCount, m_windowModeIndex,
+            findWindowModeIndex(Project::defaultWindowMode),
+            "Initial window state of desktop builds. Web and mobile ignore window settings.");
 
-        drawIntSetting("Window Width", "##WindowWidth", m_windowWidth);
-        drawIntSetting("Window Height", "##WindowHeight", m_windowHeight);
+        drawIntSetting("Window Width", "##WindowWidth", m_windowWidth, (int)Project::defaultWindowWidth);
+        drawIntSetting("Window Height", "##WindowHeight", m_windowHeight, (int)Project::defaultWindowHeight);
 
-        beginSettingsRow("Window Resizable", "Applies to desktop builds. Exported Windows and macOS builds are always resizable.");
+        if (beginSettingsRow("Window Resizable", "Applies to desktop builds. Exported Windows and macOS builds are always resizable.",
+                m_windowResizable != Project::defaultWindowResizable)) {
+            m_windowResizable = Project::defaultWindowResizable;
+        }
         ImGui::Checkbox("##WindowResizable", &m_windowResizable);
 
-        beginSettingsRow("Window Title");
+        if (beginSettingsRow("Window Title", nullptr, strcmp(m_windowTitleBuffer, Project::defaultWindowTitle) != 0)) {
+            snprintf(m_windowTitleBuffer, sizeof(m_windowTitleBuffer), "%s", Project::defaultWindowTitle);
+        }
         std::string titleHint = m_project->getName().empty() ? "Doriax" : m_project->getName();
         ImGui::SetNextItemWidth(-1);
         ImGui::InputTextWithHint("##WindowTitle", titleHint.c_str(), m_windowTitleBuffer, sizeof(m_windowTitleBuffer));
@@ -675,7 +709,9 @@ void ProjectSettingsWindow::drawWindowSettings() {
             }
         }
 
-        beginSettingsRow("VSync");
+        if (beginSettingsRow("VSync", nullptr, m_vsyncEnabled != Project::defaultVSyncEnabled)) {
+            m_vsyncEnabled = Project::defaultVSyncEnabled;
+        }
         ImGui::Checkbox("##VSync", &m_vsyncEnabled);
         ImGui::SameLine();
         helpMarker("Synchronize Play mode and supported desktop builds to the display refresh rate. "
@@ -688,11 +724,11 @@ void ProjectSettingsWindow::drawDirectoriesSettings() {
     drawSettingsPanel("##DirectoriesSettingsPanel", [this]() {
         drawDirectorySetting(
             m_project, "Assets Directory", nullptr, "##AssetsPath", "Browse##assets",
-            m_assetsDir, fs::path(".")
+            m_assetsDir, fs::path(Project::defaultAssetsDir)
         );
         drawDirectorySetting(
             m_project, "Lua Directory", nullptr, "##LuaPath", "Browse##lua",
-            m_luaDir, fs::path("."), true
+            m_luaDir, fs::path(Project::defaultLuaDir), true
         );
         drawScriptDirsSetting(m_project, m_scriptDirs);
     });
@@ -784,7 +820,10 @@ void ProjectSettingsWindow::drawBuildSettings() {
     drawSettingsPanel("##BuildSettingsPanel", [this]() {
         drawCMakeSetting();
 
-        beginSettingsRow("Compiler");
+        // Index 0 is the "Default" kit, nothing forced on CMake
+        if (beginSettingsRow("Compiler", nullptr, m_cmakeKitIndex != 0)) {
+            m_cmakeKitIndex = 0;
+        }
 
         if (m_cmakeKitIndex < 0 || m_cmakeKitIndex > static_cast<int>(m_availableKits.size())) {
             m_cmakeKitIndex = 0;
@@ -828,7 +867,7 @@ void ProjectSettingsWindow::drawBuildSettings() {
             }
         }
 
-        drawIntSetting("Parallel Jobs", "##CMakeBuildJobs", m_cmakeBuildJobs, 0, m_cmakeBuildJobsTooltip.c_str());
+        drawIntSetting("Parallel Jobs", "##CMakeBuildJobs", m_cmakeBuildJobs, (int)Project::defaultCMakeBuildJobs, 0, m_cmakeBuildJobsTooltip.c_str());
     });
 }
 

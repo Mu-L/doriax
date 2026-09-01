@@ -3430,24 +3430,24 @@ void editor::Project::resetConfigs() {
 
     // Reset state
     name = "";
-    canvasWidth = 1280;
-    canvasHeight = 720;
-    scalingMode = Scaling::FITWIDTH;
-    textureStrategy = TextureStrategy::RESIZE;
-    vsyncEnabled = true;
-    windowMode = WindowMode::WINDOWED;
-    windowWidth = canvasWidth;
-    windowHeight = canvasHeight;
-    windowResizable = true;
-    windowTitle = "";
+    canvasWidth = defaultCanvasWidth;
+    canvasHeight = defaultCanvasHeight;
+    scalingMode = defaultScalingMode;
+    textureStrategy = defaultTextureStrategy;
+    vsyncEnabled = defaultVSyncEnabled;
+    windowMode = defaultWindowMode;
+    windowWidth = defaultWindowWidth;
+    windowHeight = defaultWindowHeight;
+    windowResizable = defaultWindowResizable;
+    windowTitle = defaultWindowTitle;
     windowIcon.clear();
-    assetsDir = ".";
-    luaDir = ".";
+    assetsDir = defaultAssetsDir;
+    luaDir = defaultLuaDir;
     scriptDirs.clear();
     cmakeCCompiler = "";
     cmakeCxxCompiler = "";
     cmakeGenerator = "";
-    cmakeBuildJobs = 0;
+    cmakeBuildJobs = defaultCMakeBuildJobs;
     selectedScene = NULL_PROJECT_SCENE;
     selectedSceneForProperties = NULL_PROJECT_SCENE;
     nextSceneId = 0;

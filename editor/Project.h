@@ -321,6 +321,21 @@ namespace doriax::editor{
         void buildStandaloneShaderCache();
 
     public:
+        // Factory defaults, also used by the settings dialog to restore a value
+        static constexpr unsigned int defaultCanvasWidth = 1280;
+        static constexpr unsigned int defaultCanvasHeight = 720;
+        static constexpr Scaling defaultScalingMode = Scaling::FITWIDTH;
+        static constexpr TextureStrategy defaultTextureStrategy = TextureStrategy::RESIZE;
+        static constexpr bool defaultVSyncEnabled = true;
+        static constexpr WindowMode defaultWindowMode = WindowMode::WINDOWED;
+        static constexpr unsigned int defaultWindowWidth = defaultCanvasWidth;
+        static constexpr unsigned int defaultWindowHeight = defaultCanvasHeight;
+        static constexpr bool defaultWindowResizable = true;
+        static constexpr const char* defaultWindowTitle = "";
+        static constexpr const char* defaultAssetsDir = ".";
+        static constexpr const char* defaultLuaDir = ".";
+        static constexpr unsigned int defaultCMakeBuildJobs = 0;
+
         Project();
 
         // Live-derive the shader keys a scene needs from its current components
