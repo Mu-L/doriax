@@ -63,6 +63,7 @@ When you want a finished artifact instead, use **Desktop** export to build a rea
 - Write Lua and C++ in the integrated code editor with engine API completion
 - Fork the built-in Mesh, UI, Points, Lines, and Sky shaders, plus custom shaders for ordered post-process passes, with live viewport recompilation
 - Run the game in play mode, inspect build output, and export scenes, assets, scripts, engine files, and compiled shaders
+- Optionally call on the built-in AI assistant to inspect the project, create entities, draft Lua and C++ scripts, and invoke builds, with preview-then-approve, auto-run-read-only, and full-agent modes deciding how much it may do on its own
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/doriaxengine/doriax-site/main/screenshots/readme/editor-office-scene.png" alt="Office scene in the Doriax 3D editor" width="48%">
@@ -76,12 +77,6 @@ When you want a finished artifact instead, use **Desktop** export to build a rea
   <img src="https://raw.githubusercontent.com/doriaxengine/doriax-site/main/screenshots/readme/editor-ai-chat.png" alt="Doriax AI assistant creating entities and scripts" width="48%">
   <img src="https://raw.githubusercontent.com/doriaxengine/doriax-site/main/screenshots/editor-bones.png" alt="Bone animation tools in Doriax" width="48%">
 </p>
-
-## AI assistant
-
-The built-in assistant is an agent inside the editor: it can inspect the current project, create or update entities, write Lua and C++ scripts, and invoke builds. Preview-then-approve, auto-run-read-only, and full-agent modes let you choose how much control it has.
-
-Doriax supports OpenAI, Anthropic, Gemini, DeepSeek, and OpenAI-compatible endpoints. The assistant is optional and requires an API key for the provider you select; Doriax does not bundle an AI subscription.
 
 ## Engine features
 
