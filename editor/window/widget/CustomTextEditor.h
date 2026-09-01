@@ -10,7 +10,6 @@
 #include <unordered_set>
 #include <functional>
 #include <memory>
-#include <regex>
 #include <chrono>
 
 namespace doriax::editor {
@@ -107,13 +106,6 @@ namespace doriax::editor {
         UndoRecord() : isMerged(false) {}
     };
 
-    struct AutoCompleteItem {
-        std::string label;
-        std::string insertText;
-        std::string detail;
-        TokenType kind;
-    };
-
     struct LanguageDefinition {
         std::unordered_set<std::string> keywords;
         std::unordered_set<std::string> types;
@@ -122,9 +114,6 @@ namespace doriax::editor {
         std::string multiLineCommentStart;
         std::string multiLineCommentEnd;
         std::string preprocessorPrefix;
-        bool caseSensitive;
-
-        LanguageDefinition() : caseSensitive(true) {}
     };
 
     class CustomTextEditor {
@@ -135,7 +124,6 @@ namespace doriax::editor {
         // Text operations
         void SetText(const std::string& text);
         std::string GetText() const;
-        std::vector<std::string> GetTextLines() const;
         int GetLineCount() const { return static_cast<int>(lines.size()); }
 
         // Language and styling
@@ -178,13 +166,12 @@ namespace doriax::editor {
 
         // Find and Replace
         void SetSearchText(const std::string& text);
-        bool FindNext(bool caseSensitive = true, bool wholeWord = false);
-        bool FindPrevious(bool caseSensitive = true, bool wholeWord = false);
-        bool ReplaceNext(bool caseSensitive = true, bool wholeWord = false);
+        bool FindNext();
+        bool FindPrevious();
+        bool ReplaceNext();
         void OpenFind();
         void CloseFind();
         bool IsFindOpen() const { return showFindDialog; }
-        void SelectAllOccurrences(const std::string& text, bool caseSensitive = true);
         int ReplaceAll(const std::string& find, const std::string& replace, bool caseSensitive = true);
 
         // Editor settings
@@ -193,11 +180,9 @@ namespace doriax::editor {
         void SetTabSize(int size) { tabSize = size; }
         int GetTabSize() const { return tabSize; }
         void SetShowLineNumbers(bool show) { showLineNumbers = show; }
-        void SetShowWhitespace(bool show) { showWhitespace = show; }
         void SetAutoIndent(bool enable) { autoIndent = enable; }
         void SetHighlightCurrentLine(bool enable) { highlightCurrentLine = enable; }
         void SetMatchBrackets(bool enable) { matchBrackets = enable; }
-        void SetShowMinimap(bool show) { showMinimap = show; }
         void SetLineHeightFactor(float factor) { lineHeightFactor = factor; } // relative to the pushed ImGui font size
         void RequestFocus() { pendingFocus = true; }
 
@@ -209,25 +194,17 @@ namespace doriax::editor {
 
         struct ProjectSymbol {
             std::string name;
-            int kind; // SuggestionKind cast to int
+            SuggestionKind kind;
             std::string detail;
-            std::string parentType; // Class/type this belongs to (if any)
-            std::string typeInfo;   // Declared type (for member variables, e.g. "Mesh" for "Mesh* box4")
+            std::string parentType; // Class or type this belongs to
+            std::string typeInfo;   // Declared type, e.g. "Mesh" for "Mesh* box4"
         };
 
         // Project symbols (scanned from sibling files at runtime)
         void UpdateProjectSymbols(const std::vector<ProjectSymbol>& symbols);
 
-        // Tooltip
-        void ShowTooltip(const std::string& text, const ImVec2& pos);
-        void HideTooltip();
-
         // Rendering
         void Render(const char* title, const ImVec2& size = ImVec2(0, 0), bool border = false);
-
-        // Callbacks
-        using TextChangedCallback = std::function<void()>;
-        void SetTextChangedCallback(TextChangedCallback callback) { onTextChanged = callback; }
 
         // Font zoom requests (Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+MouseWheel); delta is +1/-1 steps, 0 means reset
         using FontZoomCallback = std::function<void(int)>;
@@ -255,17 +232,13 @@ namespace doriax::editor {
         bool readOnly;
         int tabSize;
         bool showLineNumbers;
-        bool showWhitespace;
         bool autoIndent;
         bool highlightCurrentLine;
         bool matchBrackets;
-        bool showMinimap;
         bool autoComplete;
         bool isDragging;
         bool isDraggingText;
         bool mayDragText;
-        bool isDoubleClick;
-        bool isTripleClick;
         std::chrono::steady_clock::time_point lastClickTime;
         TextPosition lastClickPos;
         int clickCount;
@@ -276,11 +249,8 @@ namespace doriax::editor {
 
         // Auto-complete state
         bool showAutoComplete;
-        std::vector<AutoCompleteItem> autoCompleteItems;
-        int autoCompleteIndex;
         TextPosition autoCompleteAnchor;
-        std::string autoCompleteFilter;
-        bool suggestionsHovered;  // Track if suggestions popup is hovered
+        bool suggestionsHovered;
 
         // Parameter hint state
         bool showParamHint;
@@ -289,12 +259,6 @@ namespace doriax::editor {
         int paramHintOverloadIndex;                     // Which overload is shown
         TextPosition paramHintAnchor;                   // Where the '(' is
         std::string paramHintFuncName;                  // Name of the function that triggered it
-
-        // Tooltip state
-        bool showTooltipFlag;
-        std::string tooltipText;
-        ImVec2 tooltipPos;
-        std::chrono::steady_clock::time_point tooltipStartTime;
 
         // Search state
         std::string searchText;
@@ -305,7 +269,6 @@ namespace doriax::editor {
         char findInputBuffer[256];
         char replaceInputBuffer[256];
         bool findCaseSensitive;
-        bool findWholeWord;
         bool pendingScrollToCursor = false;
         bool findRefocusInput = false;
         bool pendingFocus = false;
@@ -333,8 +296,6 @@ namespace doriax::editor {
         float leftMargin;
         float textStartX;
 
-        // Callbacks
-        TextChangedCallback onTextChanged;
         FontZoomCallback onFontZoom;
 
         // Semantic suggestions engine
@@ -358,9 +319,15 @@ namespace doriax::editor {
         void renderParamHint(const ImVec2& origin);
         SuggestionContext buildSuggestionContext() const;
         std::string inferTypeOfVariable(const std::string& varName, int currentLine) const;
+        // Type of the expression ending at endColumn, for member completion and param hints
+        std::string inferTypeBefore(int lineIndex, int endColumn) const;
         void tokenizeLine(int lineIndex);
         void tokenizeAll();
         TokenType classifyWord(const std::string& word) const;
+
+        void setLinesFromText(const std::string& text);
+        // Cursors sorted by edit position, so an edit never shifts one not yet applied
+        std::vector<size_t> cursorEditOrder() const;
 
         void ensureValidCursors();
         void mergeCursors();
@@ -384,16 +351,9 @@ namespace doriax::editor {
 
         void addUndoRecord();
         void finalizeUndoRecord();
-        void beginUndoGroup();
-        void endUndoGroup();
 
         int getLineIndent(int lineIndex) const;
         std::string getIndentString(int level) const;
-        void autoIndentLine(int lineIndex);
-
-        void updateAutoComplete();
-        void applyAutoComplete();
-        std::vector<AutoCompleteItem> getCompletionItems(const std::string& prefix) const;
 
         TextPosition screenToText(const ImVec2& screenPos, const ImVec2& origin) const;
         ImVec2 textToScreen(const TextPosition& pos, const ImVec2& origin) const;
@@ -405,10 +365,8 @@ namespace doriax::editor {
         void renderMatchingBrackets(ImDrawList* drawList, const ImVec2& origin);
         void renderSearchHighlights(ImDrawList* drawList, const ImVec2& origin, int startLine, int endLine);
         void renderAutoComplete(const ImVec2& origin);
-        void renderTooltip();
         void renderFindDialog(const ImVec2& editorPos, const ImVec2& editorSize);
         void renderContextMenu();
-        void renderMinimap(ImDrawList* drawList, const ImVec2& origin, const ImVec2& size);
 
         void placeCursorAtClick(const TextPosition& clickPos);
 
@@ -425,9 +383,6 @@ namespace doriax::editor {
         TextPosition findDeleteWordEnd(const TextPosition& pos) const;
 
         void updateSearchResults();
-
-        int getColumnFromOffset(int lineIndex, int offset) const;
-        int getOffsetFromColumn(int lineIndex, int column) const;
     };
 
 } // namespace doriax::editor

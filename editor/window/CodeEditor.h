@@ -7,9 +7,13 @@
 #include "Project.h"
 #include "util/EntityPayload.h"
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include <memory>
 #include <filesystem>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 namespace fs = std::filesystem;
 
@@ -23,25 +27,24 @@ namespace doriax::editor {
         fs::file_time_type lastWriteTime;
         bool isModified;
         double lastCheckTime;
-        bool hasExternalChanges;
         int savedUndoIndex;
-        int propertyInsertUndoIndex; // undo index after drag-drop insertion, -1 if none pending
+        int propertyInsertUndoIndex; // undo index after a drag-drop insertion, -1 if none pending
 
-        EditorInstance() : isOpen(true), languageType(SyntaxLanguage::None), isModified(false), lastCheckTime(0.0), hasExternalChanges(false), savedUndoIndex(0), propertyInsertUndoIndex(-1) {}
+        EditorInstance() : isOpen(true), languageType(SyntaxLanguage::None), isModified(false), lastCheckTime(0.0), savedUndoIndex(0), propertyInsertUndoIndex(-1) {}
     };
 
     class CodeEditor {
     private:
-        Project* project;
-
-        std::unordered_map<std::string, EditorInstance> editors;
         struct PendingFileChange {
             fs::path filepath;
             fs::file_time_type newWriteTime;
         };
+
+        Project* project;
+
+        std::unordered_map<std::string, EditorInstance> editors;
         std::vector<PendingFileChange> changedFilesQueue;
-        // External-change watch for script files that are NOT open in the code editor
-        // (open files are polled per-instance). Maps project-relative path -> last seen mtime.
+        // Script files referenced by entities but not open here, project-relative path -> last seen mtime
         std::unordered_map<std::string, fs::file_time_type> watchedScriptFiles;
         double lastScriptWatchTime;
         bool isFileChangePopupOpen;
@@ -56,11 +59,9 @@ namespace doriax::editor {
         std::atomic<bool> newSymbolsReady{false};
 
         void checkFileChanges(EditorInstance& instance);
-        // Drops compiled forks when instance is a shader source, after it is written or
-        // reloaded from disk.
+        // Drops the compiled forks of a shader source after it is written or reloaded
         void invalidateShadersForFile(const EditorInstance& instance);
-        // Polls script files referenced by entities but not open in the editor, and
-        // re-parses their properties when they change on disk (e.g. edited in nano).
+        // Re-parses properties of script files edited outside the editor (e.g. in nano)
         void checkExternalScriptChanges();
         bool loadFileContent(EditorInstance& instance);
         void handleFileChangePopup();
@@ -68,7 +69,6 @@ namespace doriax::editor {
         void updateScriptProperties(const EditorInstance& instance, const std::string& inMemoryContent = "");
         void updateScriptPropertiesForPath(const fs::path& relFilepath, const std::string& inMemoryContent = "");
 
-        // Background parsing for project symbols
         void updateAllProjectSymbols();
         void applyParsedProjectSymbols();
 

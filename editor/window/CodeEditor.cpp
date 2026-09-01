@@ -7,25 +7,262 @@
 #include "AppSettings.h"
 #include "util/ProjectUtils.h"
 #include "util/ScriptParser.h"
+#include "util/Util.h"
+#include "widget/SemanticSuggestions.h"
 #include "command/type/PropertyCmd.h"
 #include "Out.h"
 #include "external/IconsFontAwesome6.h"
-#include "yaml-cpp/yaml.h"
-#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <regex>
 #include <cctype>
 #include <cmath>
-#include <thread>
-#include <mutex>
-#include <atomic>
+#include <cstring>
 #include <unordered_set>
 
 using namespace doriax;
 
-editor::CodeEditor::CodeEditor(Project* project) : lastScriptWatchTime(0.0), isFileChangePopupOpen(false), windowFocused(false), lastFocused(nullptr), isParsingSymbols(false), newSymbolsReady(false) {
+namespace {
+
+using ProjectSymbol = editor::CustomTextEditor::ProjectSymbol;
+
+bool readFile(const fs::path& path, std::string& out) {
+    std::ifstream file(path);
+    if (!file.is_open()) return false;
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    out = buffer.str();
+
+    return true;
+}
+
+size_t skipSpaces(const std::string& line, size_t pos) {
+    while (pos < line.size() && (line[pos] == ' ' || line[pos] == '\t')) pos++;
+    return pos;
+}
+
+size_t scanWord(const std::string& line, size_t pos) {
+    while (pos < line.size() && (std::isalnum(static_cast<unsigned char>(line[pos])) || line[pos] == '_')) pos++;
+    return pos;
+}
+
+size_t scanQualifiedName(const std::string& line, size_t pos) {
+    while (pos < line.size() && (std::isalnum(static_cast<unsigned char>(line[pos])) || line[pos] == '_' ||
+                                 line[pos] == '.' || line[pos] == ':')) pos++;
+    return pos;
+}
+
+bool startsWithIdentifier(const std::string& word) {
+    return !word.empty() && (std::isalpha(static_cast<unsigned char>(word[0])) || word[0] == '_');
+}
+
+std::string stripNamespace(const std::string& type) {
+    size_t lastColon = type.rfind(':');
+    return (lastColon != std::string::npos) ? type.substr(lastColon + 1) : type;
+}
+
+void parseLuaSymbols(const std::string& content, std::unordered_set<std::string>& seen, std::vector<ProjectSymbol>& out) {
+    std::istringstream stream(content);
+    std::string line;
+
+    while (std::getline(stream, line)) {
+        size_t pos = line.find("function ");
+        if (pos != std::string::npos) {
+            size_t start = skipSpaces(line, pos + 9);
+            size_t end = scanQualifiedName(line, start);
+            std::string name = line.substr(start, end - start);
+
+            if (!name.empty() && name != "(" && seen.insert(name).second) {
+                // "function Player:update()" is a method of Player, so it only shows up
+                // in member completion (player:upd...)
+                size_t sep = name.find_first_of(".:");
+                if (sep != std::string::npos && sep > 0 && sep + 1 < name.size()) {
+                    std::string owner = name.substr(0, sep);
+                    std::string method = name.substr(sep + 1);
+                    out.push_back({method, editor::SuggestionKind::Method, owner + ":" + method + "()", owner, ""});
+                } else {
+                    out.push_back({name, editor::SuggestionKind::Function, "project function", "", ""});
+                }
+            }
+        }
+
+        pos = line.find("local ");
+        if (pos != std::string::npos && line.find("function", pos) == std::string::npos) {
+            size_t start = skipSpaces(line, pos + 6);
+            size_t end = scanWord(line, start);
+            std::string name = line.substr(start, end - start);
+
+            if (!name.empty() && seen.insert(name).second) {
+                out.push_back({name, editor::SuggestionKind::Variable, "local variable", "", ""});
+            }
+        }
+    }
+}
+
+// Member declared inside a class body: [const] [namespace::]Type[<...>] [*&] name [= ...];
+void parseCppMember(const std::string& line, const std::string& currentClass, std::unordered_set<std::string>& seen, std::vector<ProjectSymbol>& out) {
+    static const char* skipTokens[] = {"(", "public", "private", "protected", "friend", "#",
+                                       "DPROPERTY", "REGISTER", "using ", "typedef ", "virtual", "static"};
+    for (const char* token : skipTokens) {
+        if (line.find(token) != std::string::npos) return;
+    }
+
+    std::string decl = line.substr(skipSpaces(line, 0));
+    if (decl.empty() || decl[0] == '{' || decl[0] == '}' || decl.rfind("//", 0) == 0) return;
+    if (decl.rfind("const ", 0) == 0) decl = decl.substr(6);
+
+    size_t typeEnd = 0;
+    while (typeEnd < decl.size() && (std::isalnum(static_cast<unsigned char>(decl[typeEnd])) || decl[typeEnd] == '_' || decl[typeEnd] == ':')) typeEnd++;
+    if (typeEnd == 0 || typeEnd >= decl.size()) return;
+
+    std::string type = decl.substr(0, typeEnd);
+    if (!startsWithIdentifier(type)) return;
+
+    static const std::unordered_set<std::string> builtinTypes = {
+        "return", "void", "bool", "int", "float", "double", "char", "unsigned", "signed"
+    };
+    if (builtinTypes.count(type)) return;
+
+    size_t pos = typeEnd;
+    if (pos < decl.size() && decl[pos] == '<') {
+        int depth = 1;
+        pos++;
+        while (pos < decl.size() && depth > 0) {
+            if (decl[pos] == '<') depth++;
+            else if (decl[pos] == '>') depth--;
+            pos++;
+        }
+    }
+    while (pos < decl.size() && (decl[pos] == '*' || decl[pos] == '&' || decl[pos] == ' ')) pos++;
+
+    size_t nameEnd = scanWord(decl, pos);
+    if (nameEnd == pos) return;
+    std::string name = decl.substr(pos, nameEnd - pos);
+
+    // Only a real declaration ends with '=' or ';', anything else is stray text
+    size_t rest = skipSpaces(decl, nameEnd);
+    if (rest >= decl.size() || (decl[rest] != '=' && decl[rest] != ';')) return;
+
+    if (seen.insert(currentClass + "::" + name).second) {
+        out.push_back({name, editor::SuggestionKind::Field, type, currentClass, stripNamespace(type)});
+    }
+}
+
+void parseCppSymbols(const std::string& content, std::unordered_set<std::string>& seen, std::vector<ProjectSymbol>& out) {
+    std::istringstream stream(content);
+    std::string line;
+    std::string currentClass;
+    int braceDepth = 0;
+    int classStartDepth = -1;
+
+    while (std::getline(stream, line)) {
+        for (char ch : line) {
+            if (ch == '{') {
+                braceDepth++;
+            } else if (ch == '}') {
+                braceDepth--;
+                if (classStartDepth >= 0 && braceDepth <= classStartDepth) {
+                    currentClass.clear();
+                    classStartDepth = -1;
+                }
+            }
+        }
+
+        for (const char* keyword : {"class ", "struct "}) {
+            size_t pos = line.find(keyword);
+            if (pos == std::string::npos) continue;
+
+            size_t start = skipSpaces(line, pos + std::strlen(keyword));
+            size_t end = scanWord(line, start);
+            if (end == start) continue;
+
+            std::string name = line.substr(start, end - start);
+            if (name != "{" && seen.insert(name).second) {
+                out.push_back({name, editor::SuggestionKind::Class, "project type", "", ""});
+            }
+
+            currentClass = name;
+            classStartDepth = (line.find('{') != std::string::npos) ? braceDepth - 1 : braceDepth;
+        }
+
+        if (!currentClass.empty() && braceDepth > classStartDepth) {
+            parseCppMember(line, currentClass, seen, out);
+        }
+
+        // Function names are the word right before a '('
+        size_t paren = line.find('(');
+        if (paren == std::string::npos || paren == 0) continue;
+
+        size_t end = paren;
+        while (end > 0 && line[end - 1] == ' ') end--;
+        size_t start = end;
+        while (start > 0 && (std::isalnum(static_cast<unsigned char>(line[start - 1])) || line[start - 1] == '_')) start--;
+        if (end == start) continue;
+
+        static const std::unordered_set<std::string> statementKeywords = {
+            "if", "for", "while", "switch", "catch", "return", "sizeof", "new", "delete"
+        };
+        std::string name = line.substr(start, end - start);
+        if (startsWithIdentifier(name) && !statementKeywords.count(name) && seen.insert(name).second) {
+            out.push_back({name, editor::SuggestionKind::Function, "project function", currentClass, ""});
+        }
+    }
+}
+
+editor::SyntaxLanguage languageForPath(const fs::path& path) {
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    if (ext == ".lua") return editor::SyntaxLanguage::Lua;
+    // GLSL is close enough to reuse the C++ highlighter
+    if (ext == ".c" || editor::Util::isSourceFile(ext) || editor::Util::isHeaderFile(ext) || editor::Util::isShaderFile(ext))
+        return editor::SyntaxLanguage::Cpp;
+    if (ext == ".cmake" || path.filename() == "CMakeLists.txt") return editor::SyntaxLanguage::CMake;
+
+    return editor::SyntaxLanguage::None;
+}
+
+// Reads every project script that is not already open in the editor
+void collectProjectSources(const fs::path& projectPath, const std::unordered_set<std::string>& openFiles,
+                           std::vector<std::string>& luaContents, std::vector<std::string>& cppContents) {
+    if (projectPath.empty() || !fs::exists(projectPath)) return;
+
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(projectPath, fs::directory_options::skip_permission_denied, ec), end;
+         it != end && !ec; it.increment(ec)) {
+        const fs::directory_entry& entry = *it;
+
+        // '.doriax' holds the engine copy and the generated resources, 'build' the artifacts
+        const std::string filename = entry.path().filename().string();
+        if (filename.rfind('.', 0) == 0 || filename == "build") {
+            if (entry.is_directory(ec)) it.disable_recursion_pending();
+            continue;
+        }
+
+        const std::string path = entry.path().string();
+        if (!entry.is_regular_file() || !editor::Util::isScriptFile(path)) continue;
+
+        std::error_code relEc;
+        fs::path relPath = fs::relative(entry.path(), projectPath, relEc);
+        if (relEc || relPath.empty() || openFiles.count(relPath.string())) continue;
+
+        std::string content;
+        if (!readFile(entry.path(), content)) continue;
+
+        if (editor::Util::isLuaFile(path)) {
+            luaContents.push_back(std::move(content));
+        } else {
+            cppContents.push_back(std::move(content));
+        }
+    }
+}
+
+}
+
+editor::CodeEditor::CodeEditor(Project* project) : lastScriptWatchTime(0.0), isFileChangePopupOpen(false), windowFocused(false), lastFocused(nullptr) {
     this->project = project;
 }
 
@@ -43,6 +280,7 @@ fs::path editor::CodeEditor::resolveFilepath(const fs::path& relPath) const {
 std::string editor::CodeEditor::toRelativePath(const std::string& filepath) const {
     fs::path inputPath(filepath);
     if (inputPath.is_relative()) return filepath;
+
     fs::path projectPath = project->getProjectPath();
     if (!projectPath.empty()) {
         std::error_code ec;
@@ -51,51 +289,45 @@ std::string editor::CodeEditor::toRelativePath(const std::string& filepath) cons
             return relPath.string();
         }
     }
+
     return filepath;
 }
 
 bool editor::CodeEditor::loadFileContent(EditorInstance& instance) {
     try {
         fs::path fullPath = resolveFilepath(instance.filepath);
-        std::ifstream file(fullPath);
-        if (file.is_open()) {
-            std::stringstream buffer;
-            buffer << file.rdbuf();
-            file.close();
 
-            instance.editor->SetText(buffer.str());
-            instance.savedUndoIndex = instance.editor->GetUndoIndex();
-            instance.lastWriteTime = fs::last_write_time(fullPath);
-            instance.isModified = false;
+        std::string content;
+        if (!readFile(fullPath, content)) return false;
 
-            return true;
-        }
-    } catch (const std::exception& e) {
-        // Handle file access errors
+        instance.editor->SetText(content);
+        instance.savedUndoIndex = instance.editor->GetUndoIndex();
+        instance.lastWriteTime = fs::last_write_time(fullPath);
+        instance.isModified = false;
+
+        return true;
+    } catch (const std::exception&) {
+        return false;
     }
-    return false;
 }
 
 void editor::CodeEditor::updateAllProjectSymbols() {
-    if (isParsingSymbols) return; // Already parsing
+    if (isParsingSymbols) return;
 
-    // We make a copy of everything we need to parse off-thread to avoid locking editors
+    // Copy what the worker needs so it never reaches into the editors
     std::vector<std::string> luaContents;
     std::vector<std::string> cppContents;
+    std::unordered_set<std::string> openFiles;
 
     for (const auto& [key, instance] : editors) {
+        openFiles.insert(key);
         if (!instance.editor) continue;
-        std::string content = instance.editor->GetText();
-        if (instance.languageType == SyntaxLanguage::Lua) {
-            luaContents.push_back(std::move(content));
-        } else if (instance.languageType == SyntaxLanguage::Cpp) {
-            cppContents.push_back(std::move(content));
-        }
-    }
 
-    std::vector<std::string> openFiles;
-    for (const auto& [key, _] : editors) {
-        openFiles.push_back(key);
+        if (instance.languageType == SyntaxLanguage::Lua) {
+            luaContents.push_back(instance.editor->GetText());
+        } else if (instance.languageType == SyntaxLanguage::Cpp) {
+            cppContents.push_back(instance.editor->GetText());
+        }
     }
 
     fs::path projectPath = project->getProjectPath();
@@ -105,242 +337,20 @@ void editor::CodeEditor::updateAllProjectSymbols() {
         symbolParseThread.join();
     }
 
-    symbolParseThread = std::thread([this, projectPath, luaContents = std::move(luaContents), cppContents = std::move(cppContents), openFiles]() mutable {
-        if (!projectPath.empty() && fs::exists(projectPath)) {
-            std::error_code ec;
-            std::unordered_set<std::string> openSet(openFiles.begin(), openFiles.end());
+    symbolParseThread = std::thread([this, projectPath, openFiles = std::move(openFiles),
+                                     luaContents = std::move(luaContents), cppContents = std::move(cppContents)]() mutable {
+        collectProjectSources(projectPath, openFiles, luaContents, cppContents);
 
-            for (fs::recursive_directory_iterator it(projectPath, fs::directory_options::skip_permission_denied, ec), end;
-                 it != end && !ec; it.increment(ec)) {
-                const fs::directory_entry& entry = *it;
-
-                // '.doriax' holds the engine copy and the generated resources, 'build' the artifacts
-                const std::string filename = entry.path().filename().string();
-                if (filename.rfind('.', 0) == 0 || filename == "build") {
-                    if (entry.is_directory(ec)) it.disable_recursion_pending();
-                    continue;
-                }
-
-                if (!entry.is_regular_file()) continue;
-                std::string ext = entry.path().extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-
-                bool isLua = (ext == ".lua");
-                bool isCpp = (ext == ".cpp" || ext == ".cc" || ext == ".h" || ext == ".hpp");
-                if (!isLua && !isCpp) continue;
-
-                // Skip if already open
-                std::error_code relEc;
-                fs::path relPathFs = fs::relative(entry.path(), projectPath, relEc);
-                if (relEc || relPathFs.empty()) continue;
-                if (openSet.find(relPathFs.string()) != openSet.end()) continue;
-
-                std::ifstream file(entry.path());
-                if (!file.is_open()) continue;
-                std::stringstream buf;
-                buf << file.rdbuf();
-
-                if (isLua) {
-                    luaContents.push_back(buf.str());
-                } else {
-                    cppContents.push_back(buf.str());
-                }
-            }
-        }
-
-        std::vector<CustomTextEditor::ProjectSymbol> parsedLua;
-        std::vector<CustomTextEditor::ProjectSymbol> parsedCpp;
+        std::vector<ProjectSymbol> parsedLua;
+        std::vector<ProjectSymbol> parsedCpp;
         std::unordered_set<std::string> seenLua;
         std::unordered_set<std::string> seenCpp;
 
-        // Parse Lua
-        for (const auto& content : luaContents) {
-            std::istringstream stream(content);
-            std::string line;
-            while (std::getline(stream, line)) {
-                // function name(
-                size_t pos = line.find("function ");
-                if (pos != std::string::npos) {
-                    size_t start = pos + 9;
-                    while (start < line.size() && (line[start] == ' ' || line[start] == '\t')) start++;
-                    size_t end = start;
-                    while (end < line.size() && (std::isalnum(line[end]) || line[end] == '_' || line[end] == '.' || line[end] == ':')) end++;
-                    if (end > start) {
-                        std::string fname = line.substr(start, end - start);
-                        if (fname != "(" && !fname.empty() && seenLua.insert(fname).second) {
-                            // "function Player:update()" / "Player.update" -> method of Player,
-                            // so it only appears in member completion (player:upd...)
-                            size_t sep = fname.find_first_of(".:");
-                            if (sep != std::string::npos && sep > 0 && sep + 1 < fname.size()) {
-                                std::string owner = fname.substr(0, sep);
-                                std::string method = fname.substr(sep + 1);
-                                parsedLua.push_back({method, 9, owner + ":" + method + "()", owner, ""}); // SuggestionKind::Method = 9
-                            } else {
-                                parsedLua.push_back({fname, 2, "project function", "", ""});
-                            }
-                        }
-                    }
-                }
-                // local name = 
-                pos = line.find("local ");
-                if (pos != std::string::npos && line.find("function", pos) == std::string::npos) {
-                    size_t start = pos + 6;
-                    while (start < line.size() && (line[start] == ' ' || line[start] == '\t')) start++;
-                    size_t end = start;
-                    while (end < line.size() && (std::isalnum(line[end]) || line[end] == '_')) end++;
-                    if (end > start) {
-                        std::string vname = line.substr(start, end - start);
-                        if (seenLua.insert(vname).second) {
-                            parsedLua.push_back({vname, 3, "local variable", ""});
-                        }
-                    }
-                }
-            }
+        for (const std::string& content : luaContents) {
+            parseLuaSymbols(content, seenLua, parsedLua);
         }
-
-        // Parse Cpp
-        for (const auto& content : cppContents) {
-            std::istringstream stream(content);
-            std::string line;
-            std::string currentClass;
-            int braceDepth = 0;
-            int classStartDepth = -1;
-            while (std::getline(stream, line)) {
-                // Track brace depth for class scope
-                for (char ch : line) {
-                    if (ch == '{') braceDepth++;
-                    else if (ch == '}') {
-                        braceDepth--;
-                        if (classStartDepth >= 0 && braceDepth <= classStartDepth) {
-                            currentClass.clear();
-                            classStartDepth = -1;
-                        }
-                    }
-                }
-
-                for (const char* keyword : {"class ", "struct "}) {
-                    size_t pos = line.find(keyword);
-                    if (pos != std::string::npos) {
-                        size_t start = pos + std::strlen(keyword);
-                        while (start < line.size() && line[start] == ' ') start++;
-                        size_t end = start;
-                        while (end < line.size() && (std::isalnum(line[end]) || line[end] == '_')) end++;
-                        if (end > start) {
-                            std::string name = line.substr(start, end - start);
-                            if (name != "{" && !name.empty() && seenCpp.insert(name).second) {
-                                parsedCpp.push_back({name, 5, "project type", "", ""});
-                            }
-                            // Track class scope if line contains '{'
-                            if (line.find('{') != std::string::npos) {
-                                currentClass = name;
-                                classStartDepth = braceDepth - 1;
-                            } else {
-                                currentClass = name;
-                                classStartDepth = braceDepth;
-                            }
-                        }
-                    }
-                }
-
-                // Parse member variables inside class bodies: [const] [namespace::]Type [*&] varName [= ...];
-                if (!currentClass.empty() && braceDepth > classStartDepth) {
-                    // Skip lines with ( which are function declarations, and skip access specifiers
-                    if (line.find('(') == std::string::npos && line.find("public") == std::string::npos &&
-                        line.find("private") == std::string::npos && line.find("protected") == std::string::npos &&
-                        line.find("friend") == std::string::npos && line.find("#") == std::string::npos &&
-                        line.find("DPROPERTY") == std::string::npos && line.find("REGISTER") == std::string::npos) {
-                        // Try to match: [const] Type [*&] varName [= ...];
-                        // Trim leading whitespace
-                        size_t ls = 0;
-                        while (ls < line.size() && (line[ls] == ' ' || line[ls] == '\t')) ls++;
-                        std::string trimmed = line.substr(ls);
-
-                        // Skip empty lines, closing braces, using/typedef
-                        if (!trimmed.empty() && trimmed[0] != '}' && trimmed[0] != '{' &&
-                            trimmed.find("using ") == std::string::npos &&
-                            trimmed.find("typedef ") == std::string::npos &&
-                            trimmed.find("//") != 0 && trimmed.find("virtual") == std::string::npos &&
-                            trimmed.find("static") == std::string::npos) {
-
-                            // Skip optional 'const'
-                            std::string work = trimmed;
-                            if (work.substr(0, 6) == "const ") work = work.substr(6);
-
-                            // Extract type name (possibly with namespace::)
-                            size_t ts = 0;
-                            while (ts < work.size() && (std::isalnum(work[ts]) || work[ts] == '_' || work[ts] == ':')) ts++;
-                            if (ts > 0 && ts < work.size()) {
-                                std::string typeName = work.substr(0, ts);
-                                // Skip if type starts with digit or is a keyword
-                                if (!typeName.empty() && (std::isalpha(typeName[0]) || typeName[0] == '_') &&
-                                    typeName != "return" && typeName != "void" && typeName != "bool" &&
-                                    typeName != "int" && typeName != "float" && typeName != "double" &&
-                                    typeName != "char" && typeName != "unsigned" && typeName != "signed") {
-
-                                    // Skip template args if present
-                                    size_t afterType = ts;
-                                    if (afterType < work.size() && work[afterType] == '<') {
-                                        int depth = 1;
-                                        afterType++;
-                                        while (afterType < work.size() && depth > 0) {
-                                            if (work[afterType] == '<') depth++;
-                                            else if (work[afterType] == '>') depth--;
-                                            afterType++;
-                                        }
-                                    }
-
-                                    // Skip * & and whitespace
-                                    while (afterType < work.size() && (work[afterType] == '*' || work[afterType] == '&' || work[afterType] == ' ')) afterType++;
-
-                                    // Extract variable name
-                                    size_t vs = afterType;
-                                    size_t ve = vs;
-                                    while (ve < work.size() && (std::isalnum(work[ve]) || work[ve] == '_')) ve++;
-                                    if (ve > vs) {
-                                        std::string varName = work.substr(vs, ve - vs);
-                                        // Check it ends with ; or = (a variable decl, not random text)
-                                        size_t rest = ve;
-                                        while (rest < work.size() && work[rest] == ' ') rest++;
-                                        if (rest < work.size() && (work[rest] == '=' || work[rest] == ';')) {
-                                            // Strip namespace from type for matching engine API parentTypes
-                                            std::string strippedType = typeName;
-                                            size_t lastColon = strippedType.rfind(':');
-                                            if (lastColon != std::string::npos) {
-                                                strippedType = strippedType.substr(lastColon + 1);
-                                            }
-
-                                            std::string dedupKey = currentClass + "::" + varName;
-                                            if (!varName.empty() && seenCpp.insert(dedupKey).second) {
-                                                parsedCpp.push_back({varName, 10, typeName, currentClass, strippedType}); // SuggestionKind::Field = 10
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Parse function names (word before '(')
-                size_t paren = line.find('(');
-                if (paren != std::string::npos && paren > 0) {
-                    size_t end = paren;
-                    while (end > 0 && line[end - 1] == ' ') end--;
-                    size_t start = end;
-                    while (start > 0 && (std::isalnum(line[start - 1]) || line[start - 1] == '_')) start--;
-                    if (end > start) {
-                        std::string fname = line.substr(start, end - start);
-                        // Reject names starting with a digit
-                        if (!fname.empty() && (std::isalpha(fname[0]) || fname[0] == '_') &&
-                            fname != "if" && fname != "for" &&
-                            fname != "while" && fname != "switch" && fname != "catch" &&
-                            fname != "return" && fname != "sizeof" && fname != "new" &&
-                            fname != "delete" && seenCpp.insert(fname).second) {
-                            parsedCpp.push_back({fname, 2, "project function", currentClass, ""});
-                        }
-                    }
-                }
-            }
+        for (const std::string& content : cppContents) {
+            parseCppSymbols(content, seenCpp, parsedCpp);
         }
 
         {
@@ -356,34 +366,31 @@ void editor::CodeEditor::updateAllProjectSymbols() {
 void editor::CodeEditor::applyParsedProjectSymbols() {
     if (!newSymbolsReady) return;
 
-    std::vector<CustomTextEditor::ProjectSymbol> luaSyms;
-    std::vector<CustomTextEditor::ProjectSymbol> cppSyms;
+    std::vector<ProjectSymbol> luaSymbols;
+    std::vector<ProjectSymbol> cppSymbols;
 
     {
         std::lock_guard<std::mutex> lock(parsedSymbolsMutex);
-        luaSyms = newLuaSymbols;
-        cppSyms = newCppSymbols;
+        luaSymbols = std::move(newLuaSymbols);
+        cppSymbols = std::move(newCppSymbols);
         newSymbolsReady = false;
     }
 
     for (auto& [key, instance] : editors) {
         if (!instance.editor) continue;
+
         if (instance.languageType == SyntaxLanguage::Lua) {
-            instance.editor->UpdateProjectSymbols(luaSyms);
+            instance.editor->UpdateProjectSymbols(luaSymbols);
         } else if (instance.languageType == SyntaxLanguage::Cpp) {
-            instance.editor->UpdateProjectSymbols(cppSyms);
+            instance.editor->UpdateProjectSymbols(cppSymbols);
         }
     }
 }
 
-// A shader source changed on disk (saved here, or reloaded after an external edit):
-// drop the compiled forks that depend on it so the viewport recompiles. The build
-// cache resolves sources through an in-memory snapshot, so without this an external
-// edit would never reach the renderer.
 void editor::CodeEditor::invalidateShadersForFile(const EditorInstance& instance) {
-    std::string ext = instance.filepath.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    if (ext == ".vert" || ext == ".frag" || ext == ".glsl") {
+    // The build cache resolves sources through an in-memory snapshot, so without this
+    // an external edit would never reach the renderer
+    if (Util::isShaderFile(instance.filepath.string())) {
         project->invalidateCustomShaders();
     }
 }
@@ -392,60 +399,48 @@ void editor::CodeEditor::checkFileChanges(EditorInstance& instance) {
     try {
         fs::path fullPath = resolveFilepath(instance.filepath);
         auto currentWriteTime = fs::last_write_time(fullPath);
-        if (currentWriteTime != instance.lastWriteTime) {
-            // Read the file to check if content actually changed
-            std::ifstream file(fullPath);
-            if (file.is_open()) {
-                std::stringstream buffer;
-                buffer << file.rdbuf();
-                file.close();
-                if (buffer.str() == instance.editor->GetText()) {
-                    // Content is the same (e.g. we just saved), update timestamp only
-                    instance.lastWriteTime = currentWriteTime;
-                    return;
-                }
-            }
-            if (instance.isModified) {
-                // Check if this file is already in the queue
-                auto it = std::find_if(changedFilesQueue.begin(), changedFilesQueue.end(),
-                    [&](const PendingFileChange& change) {
-                        return change.filepath == instance.filepath;
-                    });
+        if (currentWriteTime == instance.lastWriteTime) return;
 
-                // Only add to queue if not already present
-                if (it == changedFilesQueue.end()) {
-                    changedFilesQueue.push_back({instance.filepath, currentWriteTime});
-                }
-            } else {
-                // If no unsaved changes, silently reload the file
-                loadFileContent(instance);
-                updateScriptProperties(instance);
-                invalidateShadersForFile(instance);
-            }
+        std::string content;
+        if (readFile(fullPath, content) && content == instance.editor->GetText()) {
+            // Same content, this is our own save
+            instance.lastWriteTime = currentWriteTime;
+            return;
         }
-    } catch (const std::exception& e) {
-        // Handle file access errors
+
+        if (!instance.isModified) {
+            loadFileContent(instance);
+            updateScriptProperties(instance);
+            invalidateShadersForFile(instance);
+            return;
+        }
+
+        auto it = std::find_if(changedFilesQueue.begin(), changedFilesQueue.end(),
+            [&](const PendingFileChange& change) {
+                return change.filepath == instance.filepath;
+            });
+
+        if (it == changedFilesQueue.end()) {
+            changedFilesQueue.push_back({instance.filepath, currentWriteTime});
+        }
+    } catch (const std::exception&) {
+        // File gone or unreadable this tick
     }
 }
 
 void editor::CodeEditor::checkExternalScriptChanges() {
-    // Skip entirely while any scene is playing: play mutates the live scene in-process and
-    // restores it from a snapshot on stop, so a background property refresh would fight it.
-    // Baselines stay frozen and external edits are picked up on the first tick after stop.
+    // Play mutates the live scene in-process and restores it from a snapshot on stop, so a
+    // background property refresh would fight it. External edits are picked up after stop.
     for (const auto& sceneProject : project->getScenes()) {
         if (sceneProject.playState != ScenePlayState::STOPPED)
             return;
     }
 
-    // Collect every script file referenced by entities across loaded scenes. These are
-    // watched even when not open in the code editor, so editing a script header/.lua in
-    // an external editor (nano, etc.) still refreshes the entity's properties.
     std::unordered_set<std::string> referenced;
     for (auto& sceneProject : project->getScenes()) {
         if (!sceneProject.scene)
             continue;
-        // Iterate only entities that actually hold a ScriptComponent (dense pool)
-        // instead of scanning every entity in the scene.
+
         auto scriptsArray = sceneProject.scene->getComponentArray<ScriptComponent>();
         for (size_t i = 0; i < scriptsArray->size(); i++) {
             const ScriptComponent& scriptComponent = scriptsArray->getComponentFromIndex(i);
@@ -453,7 +448,7 @@ void editor::CodeEditor::checkExternalScriptChanges() {
                 if (scriptEntry.type == ScriptType::CPP && !scriptEntry.headerPath.empty()) {
                     referenced.insert(scriptEntry.headerPath);
                 } else if (scriptEntry.type == ScriptType::LUA && !scriptEntry.path.empty()) {
-                    // Stored relative to the Lua root; the watch list is project-relative.
+                    // Stored relative to the Lua root, the watch list is project-relative
                     referenced.insert(toRelativePath(project->resolveLuaPath(scriptEntry.path).string()));
                 }
             }
@@ -465,31 +460,27 @@ void editor::CodeEditor::checkExternalScriptChanges() {
         try {
             currentWriteTime = fs::last_write_time(resolveFilepath(relPath));
         } catch (const std::exception&) {
-            continue; // missing / inaccessible this tick — skip
+            continue;
         }
 
         auto it = watchedScriptFiles.find(relPath);
         if (it == watchedScriptFiles.end()) {
-            // First sighting — record baseline, don't refresh (already in sync on load).
+            // First sighting, record the baseline without refreshing
             watchedScriptFiles[relPath] = currentWriteTime;
             continue;
         }
         if (it->second == currentWriteTime)
-            continue; // unchanged
+            continue;
 
-        // Changed on disk. If the file is open, the per-instance watcher
-        // (checkFileChanges) owns reloading the buffer + properties and the unsaved-edit
-        // conflict prompt — just resync our baseline so we don't double-handle it.
+        // checkFileChanges owns open files, including the unsaved-edit conflict prompt
         it->second = currentWriteTime;
         if (editors.find(relPath) != editors.end())
             continue;
 
-        // Not open in the editor: re-parse properties straight from disk.
         updateScriptPropertiesForPath(relPath);
     }
 
-    // Forget files no longer referenced (entity/script removed) so a re-added file
-    // gets a fresh baseline instead of an immediate spurious refresh.
+    // Forget unreferenced files so a re-added one gets a fresh baseline
     for (auto it = watchedScriptFiles.begin(); it != watchedScriptFiles.end();) {
         if (referenced.find(it->first) == referenced.end())
             it = watchedScriptFiles.erase(it);
@@ -508,29 +499,22 @@ void editor::CodeEditor::handleFileChangePopup() {
         isFileChangePopupOpen = true;
     }
 
-    // Center popup
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     if (ImGui::BeginPopupModal("Files Changed###FilesChanged", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         if (changedFilesQueue.size() == 1) {
-            ImGui::Text("The file '%s' has been modified externally.", 
+            ImGui::Text("The file '%s' has been modified externally.",
                 changedFilesQueue[0].filepath.filename().string().c_str());
         } else {
             ImGui::Text("%zu files have been modified externally:", changedFilesQueue.size());
 
-            // Display up to 10 files
-            int fileCount = 0;
-            for (const auto& change : changedFilesQueue) {
-                if (fileCount < 10) {
-                    ImGui::BulletText("%s", change.filepath.filename().string().c_str());
-                }
-                fileCount++;
+            const size_t maxListed = std::min<size_t>(changedFilesQueue.size(), 10);
+            for (size_t i = 0; i < maxListed; i++) {
+                ImGui::BulletText("%s", changedFilesQueue[i].filepath.filename().string().c_str());
             }
-
-            // If there are more files, show a message
-            if (fileCount > 10) {
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "And %zu more files...", changedFilesQueue.size() - 10);
+            if (changedFilesQueue.size() > maxListed) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "And %zu more files...", changedFilesQueue.size() - maxListed);
             }
         }
 
@@ -544,7 +528,6 @@ void editor::CodeEditor::handleFileChangePopup() {
         ImGui::SetCursorPosX((windowWidth - buttonWidth * 2 - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
 
         if (ImGui::Button("Yes", ImVec2(buttonWidth, 0))) {
-            // Reload all files in the queue
             for (const auto& change : changedFilesQueue) {
                 auto it = editors.find(change.filepath.string());
                 if (it != editors.end()) {
@@ -559,7 +542,6 @@ void editor::CodeEditor::handleFileChangePopup() {
         }
         ImGui::SameLine();
         if (ImGui::Button("No", ImVec2(buttonWidth, 0))) {
-            // Update timestamps without reloading
             for (const auto& change : changedFilesQueue) {
                 auto it = editors.find(change.filepath.string());
                 if (it != editors.end()) {
@@ -589,8 +571,7 @@ void editor::CodeEditor::updateScriptPropertiesForPath(const fs::path& relFilepa
     const std::string relPathStr = relFilepath.string();
     const fs::path fullPath = resolveFilepath(relFilepath);
 
-    // Re-parse and refresh properties for EVERY entity whose script references this file
-    // (multiple entities can share the same script).
+    // Several entities can share the same script, so every one of them is refreshed
     for (auto& sceneProject : project->getScenes()) {
         if (!sceneProject.scene)
             continue;
@@ -600,32 +581,21 @@ void editor::CodeEditor::updateScriptPropertiesForPath(const fs::path& relFilepa
             if (!scriptComponent)
                 continue;
 
-            // Check all scripts in the component
             for (const auto& scriptEntry : scriptComponent->scripts) {
-                bool isCppScript = scriptEntry.type == ScriptType::CPP;
+                bool matchesFile = (scriptEntry.type == ScriptType::CPP) ? (scriptEntry.headerPath == relPathStr)
+                                                                        : (scriptEntry.path == relPathStr);
+                if (!matchesFile)
+                    continue;
 
-                bool isLuaScript = scriptEntry.type == ScriptType::LUA;
+                std::vector<ScriptEntry> newScripts = scriptComponent->scripts;
 
-                // For C++ scripts we compare headerPath, for Lua we compare .lua path
-                // relFilepath is already project-relative
-                bool matchesFile = false;
-                if (isCppScript && !scriptEntry.headerPath.empty()) {
-                    matchesFile = (scriptEntry.headerPath == relPathStr);
-                } else if (isLuaScript && !scriptEntry.path.empty()) {
-                    matchesFile = (scriptEntry.path == relPathStr);
+                // Ignore edits that do not change script properties
+                if (project->updateScriptProperties(&sceneProject, entity, newScripts, inMemoryContent, fullPath.string())) {
+                    PropertyCmd<std::vector<ScriptEntry>> propertyCmd(project, sceneProject.id, entity, ComponentType::ScriptComponent, "scripts", newScripts);
+                    propertyCmd.execute();
                 }
 
-                if (matchesFile) {
-                    std::vector<ScriptEntry> newScripts = scriptComponent->scripts;
-
-                    // Ignore edits that do not change script properties.
-                    if (project->updateScriptProperties(&sceneProject, entity, newScripts, inMemoryContent, fullPath.string())) {
-                        PropertyCmd<std::vector<ScriptEntry>> propertyCmd(project, sceneProject.id, entity, ComponentType::ScriptComponent, "scripts", newScripts);
-                        propertyCmd.execute();
-                    }
-
-                    break; // Found matching script in this entity, move to the next entity
-                }
+                break;
             }
         }
     }
@@ -634,25 +604,29 @@ void editor::CodeEditor::updateScriptPropertiesForPath(const fs::path& relFilepa
 std::string editor::CodeEditor::toCamelCase(const std::string& name) {
     std::string result;
     bool nextUpper = false;
+
     for (char c : name) {
-        if (std::isalnum(static_cast<unsigned char>(c))) {
-            if (result.empty()) {
-                result += (char)std::tolower(static_cast<unsigned char>(c));
-            } else if (nextUpper) {
-                result += (char)std::toupper(static_cast<unsigned char>(c));
-                nextUpper = false;
-            } else {
-                result += c;
-            }
-        } else {
+        if (!std::isalnum(static_cast<unsigned char>(c))) {
             if (!result.empty()) nextUpper = true;
+            continue;
+        }
+
+        if (result.empty()) {
+            result += (char)std::tolower(static_cast<unsigned char>(c));
+        } else if (nextUpper) {
+            result += (char)std::toupper(static_cast<unsigned char>(c));
+            nextUpper = false;
+        } else {
+            result += c;
         }
     }
+
     return result.empty() ? "entity" : result;
 }
 
 std::string editor::CodeEditor::toDisplayName(const std::string& camelCase) {
     std::string result;
+
     for (size_t i = 0; i < camelCase.size(); i++) {
         if (i == 0) {
             result += (char)std::toupper(static_cast<unsigned char>(camelCase[i]));
@@ -663,6 +637,7 @@ std::string editor::CodeEditor::toDisplayName(const std::string& camelCase) {
             result += camelCase[i];
         }
     }
+
     return result;
 }
 
@@ -728,13 +703,16 @@ void editor::CodeEditor::offsetToLineCol(const std::string& text, size_t offset,
     line = 0;
     col = 0;
     for (size_t i = 0; i < offset && i < text.size(); i++) {
-        if (text[i] == '\n') { line++; col = 0; }
-        else { col++; }
+        if (text[i] == '\n') {
+            line++;
+            col = 0;
+        } else {
+            col++;
+        }
     }
 }
 
 void editor::CodeEditor::insertLuaEntityProperty(EditorInstance& instance, Entity entity, uint32_t entitySceneId) {
-    // Resolve the source scene
     SceneProject* sourceSceneProject = project->getScene(entitySceneId);
     if (!sourceSceneProject || !sourceSceneProject->scene) {
         sourceSceneProject = project->getSelectedScene();
@@ -744,59 +722,49 @@ void editor::CodeEditor::insertLuaEntityProperty(EditorInstance& instance, Entit
     Scene* scene = sourceSceneProject->scene;
     if (!scene->isEntityCreated(entity)) return;
 
-    // Get entity info
     std::string entityType = editor::ProjectUtils::getEntityTypeName(scene, entity);
 
-    // Check if the entity has a Lua script — use its className as a more specific type
+    // A Lua script class is a more specific type than the entity type
     ScriptComponent* entityScriptComp = scene->findComponent<ScriptComponent>(entity);
     if (entityScriptComp) {
-        for (const auto& se : entityScriptComp->scripts) {
-            if (se.type == ScriptType::LUA && se.enabled && !se.className.empty()) {
-                entityType = se.className;
+        for (const auto& scriptEntry : entityScriptComp->scripts) {
+            if (scriptEntry.type == ScriptType::LUA && scriptEntry.enabled && !scriptEntry.className.empty()) {
+                entityType = scriptEntry.className;
                 break;
             }
         }
     }
 
+    std::string text = instance.editor->GetText();
     std::string varName = toCamelCase(scene->getEntityName(entity));
 
-    // Avoid duplicate property names
-    std::string text = instance.editor->GetText();
-    {
-        std::string baseName = varName;
-        int suffix = 2;
-        while (text.find("name = \"" + varName + "\"") != std::string::npos) {
-            varName = baseName + std::to_string(suffix++);
-        }
+    std::string baseName = varName;
+    int suffix = 2;
+    while (text.find("name = \"" + varName + "\"") != std::string::npos) {
+        varName = baseName + std::to_string(suffix++);
     }
 
-    std::string displayName = toDisplayName(varName);
-
-    // Build the Lua property entry text
     std::string propEntry =
         "        {\n"
         "            name = \"" + varName + "\",\n"
-        "            displayName = \"" + displayName + "\",\n"
+        "            displayName = \"" + toDisplayName(varName) + "\",\n"
         "            type = \"" + entityType + "\",\n"
         "            default = nil\n"
         "        }";
 
-    // Find the properties table and insert at the end
-    // Look for "properties = {" or "properties={" pattern
-    std::regex propsRegex(R"(properties\s*=\s*\{)");
     std::smatch match;
-    if (!std::regex_search(text, match, propsRegex)) {
+    if (!std::regex_search(text, match, std::regex(R"(properties\s*=\s*\{)"))) {
         Out::error("Could not find 'properties = {' table in Lua script");
         return;
     }
 
-    // Find the matching closing brace by counting braces
     size_t openPos = match.position() + match.length();
     int depth = 1;
     size_t closePos = std::string::npos;
     for (size_t i = openPos; i < text.size(); i++) {
-        if (text[i] == '{') depth++;
-        else if (text[i] == '}') {
+        if (text[i] == '{') {
+            depth++;
+        } else if (text[i] == '}') {
             depth--;
             if (depth == 0) {
                 closePos = i;
@@ -809,32 +777,20 @@ void editor::CodeEditor::insertLuaEntityProperty(EditorInstance& instance, Entit
         return;
     }
 
-    // Check if there are existing entries (look for '{' between open and close)
-    bool hasEntries = false;
-    for (size_t i = openPos; i < closePos; i++) {
-        if (text[i] == '{') { hasEntries = true; break; }
-    }
+    bool hasEntries = text.find('{', openPos) < closePos;
+    std::string insertion = hasEntries ? (",\n" + propEntry) : ("\n" + propEntry + "\n    ");
 
-    // Build insertion text
-    std::string insertion;
-    if (hasEntries) {
-        insertion = ",\n" + propEntry;
-    } else {
-        insertion = "\n" + propEntry + "\n    ";
-    }
-
-    // Insert before the closing brace of properties table using cursor-based insert (preserves undo)
+    // Inserting through the cursor keeps the undo history
     int insertLine, insertCol;
     offsetToLineCol(text, closePos, insertLine, insertCol);
     instance.editor->SetCursorPosition(insertLine, insertCol);
     instance.editor->InsertText(insertion, false);
 
-    // Update the properties dynamically parsing the current text, without overwriting the file
+    // Parse the properties from the current text, without overwriting the file
     instance.isModified = true;
     instance.propertyInsertUndoIndex = instance.editor->GetUndoIndex();
     updateScriptProperties(instance, instance.editor->GetText());
 
-    // Now link the entity to the newly created property
     SceneProject* selectedScene = project->getSelectedScene();
     if (!selectedScene || !selectedScene->scene) return;
 
@@ -845,32 +801,29 @@ void editor::CodeEditor::insertLuaEntityProperty(EditorInstance& instance, Entit
         if (!scriptComp) continue;
 
         for (size_t si = 0; si < scriptComp->scripts.size(); si++) {
-            auto& scriptEntry = scriptComp->scripts[si];
+            const ScriptEntry& scriptEntry = scriptComp->scripts[si];
             if (scriptEntry.type != ScriptType::LUA) continue;
             if (project->resolveLuaPath(scriptEntry.path) != resolveFilepath(instance.filepath)) continue;
 
-            // Find the newly added property by name, a same-named property of another
-            // type is not the one just inserted
+            // A same-named property of another type is not the one just inserted
             for (size_t pi = 0; pi < scriptEntry.properties.size(); pi++) {
-                if (scriptEntry.properties[pi].name == varName &&
-                    scriptEntry.properties[pi].type == ScriptPropertyType::EntityReference) {
-                    // Set EntityReference value
-                    std::vector<ScriptEntry> newScripts = scriptComp->scripts;
-                    newScripts[si].properties[pi].value = EntityReference{entity, storedSceneId};
+                if (scriptEntry.properties[pi].name != varName ||
+                    scriptEntry.properties[pi].type != ScriptPropertyType::EntityReference) continue;
 
-                    PropertyCmd<std::vector<ScriptEntry>> propCmd(
-                        project, selectedScene->id, sceneEntity,
-                        ComponentType::ScriptComponent, "scripts", newScripts);
-                    propCmd.execute();
-                    return;
-                }
+                std::vector<ScriptEntry> newScripts = scriptComp->scripts;
+                newScripts[si].properties[pi].value = EntityReference{entity, storedSceneId};
+
+                PropertyCmd<std::vector<ScriptEntry>> propCmd(
+                    project, selectedScene->id, sceneEntity,
+                    ComponentType::ScriptComponent, "scripts", newScripts);
+                propCmd.execute();
+                return;
             }
         }
     }
 }
 
 void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entity entity, uint32_t entitySceneId) {
-    // Resolve the source scene
     SceneProject* sourceSceneProject = project->getScene(entitySceneId);
     if (!sourceSceneProject || !sourceSceneProject->scene) {
         sourceSceneProject = project->getSelectedScene();
@@ -880,35 +833,32 @@ void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entit
     Scene* scene = sourceSceneProject->scene;
     if (!scene->isEntityCreated(entity)) return;
 
-    // Get entity info
     std::string entityType = editor::ProjectUtils::getEntityTypeName(scene, entity);
 
-    // A C++ script that does not inherit ScriptBase is an entity subclass. Use
-    // its class as the more specific entity-reference type.
+    // A C++ script that does not inherit ScriptBase is an entity subclass, so its class
+    // is the more specific entity-reference type
     bool isSubclassType = false;
     std::string subclassHeaderFile;
     ScriptComponent* entityScriptComp = scene->findComponent<ScriptComponent>(entity);
     if (entityScriptComp) {
-        for (const auto& se : entityScriptComp->scripts) {
-            if (se.type != ScriptType::CPP || se.className.empty() || se.headerPath.empty())
+        for (const auto& scriptEntry : entityScriptComp->scripts) {
+            if (scriptEntry.type != ScriptType::CPP || scriptEntry.className.empty() || scriptEntry.headerPath.empty())
                 continue;
 
             std::optional<bool> inheritsScriptBase;
-            auto openHeader = editors.find(toRelativePath(se.headerPath));
+            auto openHeader = editors.find(toRelativePath(scriptEntry.headerPath));
             if (openHeader != editors.end()) {
                 inheritsScriptBase = ScriptParser::inheritsScriptBaseFromString(
-                    openHeader->second.editor->GetText(), se.className);
+                    openHeader->second.editor->GetText(), scriptEntry.className);
             } else {
                 inheritsScriptBase = ScriptParser::inheritsScriptBase(
-                    resolveFilepath(se.headerPath), se.className);
+                    resolveFilepath(scriptEntry.headerPath), scriptEntry.className);
             }
 
             if (inheritsScriptBase && !*inheritsScriptBase) {
-                entityType = se.className;
+                entityType = scriptEntry.className;
                 isSubclassType = true;
-                if (!se.headerPath.empty()) {
-                    subclassHeaderFile = fs::path(se.headerPath).filename().string();
-                }
+                subclassHeaderFile = fs::path(scriptEntry.headerPath).filename().string();
                 break;
             }
         }
@@ -916,119 +866,81 @@ void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entit
 
     std::string varName = toCamelCase(scene->getEntityName(entity));
 
-    // Determine header path: if currently viewing .cpp, derive .h path
     fs::path headerPath = instance.filepath;
-    std::string ext = headerPath.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    bool isSource = (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c");
-    if (isSource) {
+    if (!Util::isHeaderFile(headerPath.string())) {
         headerPath.replace_extension(".h");
     }
 
-    // Get header text: either from open editor or from disk
     std::string headerText;
     EditorInstance* headerInstance = nullptr;
-    std::string headerKey = headerPath.string();
-    auto headerIt = editors.find(headerKey);
+    auto headerIt = editors.find(headerPath.string());
     if (headerIt != editors.end()) {
         headerInstance = &headerIt->second;
         headerText = headerInstance->editor->GetText();
-    } else {
-        // Read from disk
-        fs::path fullHeaderPath = resolveFilepath(headerPath);
-        std::ifstream file(fullHeaderPath);
-        if (!file.is_open()) {
-            Out::error("Could not open header file: %s", headerPath.string().c_str());
-            return;
-        }
-        headerText = std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        file.close();
+    } else if (!readFile(resolveFilepath(headerPath), headerText)) {
+        Out::error("Could not open header file: %s", headerPath.string().c_str());
+        return;
     }
 
-    // Avoid duplicate variable names in header
-    {
-        std::string baseName = varName;
-        int suffix = 2;
-        // Any member or method already using the name: a duplicate property is what
-        // makes the entity reference land on the wrong one
-        auto nameTaken = [&headerText](const std::string& name) {
-            return std::regex_search(headerText, std::regex(R"([\s*])" + name + R"(\s*(?:=|;|\{|\[|\())"));
-        };
-        while (nameTaken(varName)) {
-            varName = baseName + std::to_string(suffix++);
-        }
+    // Any member or method already using the name would make the entity reference land
+    // on the wrong one
+    auto nameTaken = [&headerText](const std::string& name) {
+        return std::regex_search(headerText, std::regex(R"([\s*])" + name + R"(\s*(?:=|;|\{|\[|\())"));
+    };
+    std::string baseName = varName;
+    int suffix = 2;
+    while (nameTaken(varName)) {
+        varName = baseName + std::to_string(suffix++);
     }
 
-    std::string displayName = toDisplayName(varName);
-
-    // Build the DPROPERTY + member declaration
     std::string typeDecl = isSubclassType ? entityType : ("doriax::" + entityType);
     std::string propCode =
         "\n"
-        "    DPROPERTY(\"" + displayName + "\")\n"
+        "    DPROPERTY(\"" + toDisplayName(varName) + "\")\n"
         "    " + typeDecl + "* " + varName + " = nullptr;\n";
 
     // The member type must be declared: a subclass type needs its own script header,
     // an engine type needs the engine header
     bool needsInclude = false;
     size_t includeInsertPos = std::string::npos;
-    std::string includeDirective;
     std::string typeHeaderFile = isSubclassType ? subclassHeaderFile : (entityType + ".h");
-    if (!typeHeaderFile.empty()) {
-        includeDirective = "#include \"" + typeHeaderFile + "\"";
-        if (headerText.find(includeDirective) == std::string::npos) {
-            needsInclude = true;
-            // Find the last #include line to insert after it
-            size_t lastInclude = std::string::npos;
-            size_t searchPos = 0;
-            while (true) {
-                size_t found = headerText.find("#include", searchPos);
-                if (found == std::string::npos) break;
-                lastInclude = found;
-                searchPos = found + 1;
-            }
-            if (lastInclude != std::string::npos) {
-                size_t endOfLine = headerText.find('\n', lastInclude);
-                if (endOfLine != std::string::npos) {
-                    includeInsertPos = endOfLine + 1;
-                }
+    std::string includeDirective = "#include \"" + typeHeaderFile + "\"";
+    if (!typeHeaderFile.empty() && headerText.find(includeDirective) == std::string::npos) {
+        needsInclude = true;
+
+        size_t lastInclude = std::string::npos;
+        size_t searchPos = 0;
+        while ((searchPos = headerText.find("#include", searchPos)) != std::string::npos) {
+            lastInclude = searchPos;
+            searchPos++;
+        }
+        if (lastInclude != std::string::npos) {
+            size_t endOfLine = headerText.find('\n', lastInclude);
+            if (endOfLine != std::string::npos) {
+                includeInsertPos = endOfLine + 1;
             }
         }
     }
 
-    // Find where to insert DPROPERTY on the ORIGINAL headerText (before #include modification)
-    // This way cursor positions match the editor content
+    // Insertion points are found on the original text so they match the editor content
     size_t insertPos = std::string::npos;
 
-    // Find last DPROPERTY declaration (the variable line after it ends with ";")
-    // Type is [\w:<>]+ and the pointer '*' / whitespace separator is [\s*]+ so that the
-    // variable line is matched whether '*' sits next to the type ("T* v") or the name ("T *v").
-    // The "= default" part is optional to match members declared without an initializer.
-    std::regex spropertyRegex(R"(DPROPERTY\s*\([^)]*\)\s*\n\s*[\w:<>]+[\s*]+\w+\s*(?:=[^;]*)?;)");
-    std::sregex_iterator it(headerText.begin(), headerText.end(), spropertyRegex);
-    std::sregex_iterator endIt;
-    size_t lastSpropertyEnd = std::string::npos;
-    for (; it != endIt; ++it) {
-        lastSpropertyEnd = it->position() + it->length();
+    // The declaration after DPROPERTY ends with ';'. Type is [\w:<>]+ and the pointer '*' or
+    // whitespace separator is [\s*]+, so "T* v" and "T *v" both match. The initializer is optional.
+    std::regex propertyRegex(R"(DPROPERTY\s*\([^)]*\)\s*\n\s*[\w:<>]+[\s*]+\w+\s*(?:=[^;]*)?;)");
+    size_t lastPropertyEnd = std::string::npos;
+    for (std::sregex_iterator it(headerText.begin(), headerText.end(), propertyRegex), endIt; it != endIt; ++it) {
+        lastPropertyEnd = it->position() + it->length();
     }
 
-    if (lastSpropertyEnd != std::string::npos) {
-        // Insert after the last DPROPERTY block (skip to next line)
-        size_t nextLine = headerText.find('\n', lastSpropertyEnd);
-        if (nextLine != std::string::npos) {
-            insertPos = nextLine + 1;
-        } else {
-            insertPos = lastSpropertyEnd;
-        }
-    }
-
-    if (insertPos == std::string::npos) {
-        // Fallback: find constructor pattern "    ClassName(" — a line with identifier followed by (
-        // Look for first line with pattern "    SomeName(doriax::" which is the constructor
-        std::regex ctorRegex(R"(\n(\s+)\w+\s*\()");
+    if (lastPropertyEnd != std::string::npos) {
+        size_t nextLine = headerText.find('\n', lastPropertyEnd);
+        insertPos = (nextLine != std::string::npos) ? nextLine + 1 : lastPropertyEnd;
+    } else {
+        // No property yet, fall back to the line above the constructor
         std::smatch ctorMatch;
-        if (std::regex_search(headerText, ctorMatch, ctorRegex)) {
-            insertPos = ctorMatch.position() + 1; // After the newline
+        if (std::regex_search(headerText, ctorMatch, std::regex(R"(\n(\s+)\w+\s*\()"))) {
+            insertPos = ctorMatch.position() + 1;
         }
     }
 
@@ -1037,63 +949,50 @@ void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entit
         return;
     }
 
-    // Apply changes via editor (preserves undo) or write to disk
     if (headerInstance) {
-        // Insert #include first (if needed), then DPROPERTY
-        // Must do #include first so it doesn't shift DPROPERTY position calculation
-        int includeLineShift = 0;
+        // The include goes in first, so the DPROPERTY position shifts by its line
         if (needsInclude && includeInsertPos != std::string::npos) {
-            int incLine, incCol;
-            offsetToLineCol(headerText, includeInsertPos, incLine, incCol);
-            headerInstance->editor->SetCursorPosition(incLine, incCol);
+            int includeLine, includeCol;
+            offsetToLineCol(headerText, includeInsertPos, includeLine, includeCol);
+            headerInstance->editor->SetCursorPosition(includeLine, includeCol);
             headerInstance->editor->InsertText(includeDirective + "\n", false);
-            includeLineShift = 1; // One extra line added
         }
 
-        // Now insert DPROPERTY at the adjusted position
         int insertLine, insertCol;
         offsetToLineCol(headerText, insertPos, insertLine, insertCol);
-        // Shift if #include was inserted before this position
         if (needsInclude && includeInsertPos != std::string::npos && includeInsertPos <= insertPos) {
-            insertLine += includeLineShift;
+            insertLine++;
         }
         headerInstance->editor->SetCursorPosition(insertLine, insertCol);
         headerInstance->editor->InsertText(propCode, false);
 
-        // Update the properties dynamically parsing the current text, without overwriting the file
+        // Parse the properties from the current text, without overwriting the file
         headerInstance->isModified = true;
         headerInstance->propertyInsertUndoIndex = headerInstance->editor->GetUndoIndex();
     } else {
-        // Header not open in editor — build full text and write to disk
-        // Apply #include first (modifies headerText), then insert DPROPERTY
         if (needsInclude && includeInsertPos != std::string::npos) {
             std::string incText = includeDirective + "\n";
             headerText.insert(includeInsertPos, incText);
-            // Shift insertPos if it's after the #include insertion
             if (includeInsertPos <= insertPos) {
                 insertPos += incText.size();
             }
         }
-        std::string newHeaderText = headerText.substr(0, insertPos) + propCode + headerText.substr(insertPos);
-        fs::path fullHeaderPath = resolveFilepath(headerPath);
-        std::ofstream file(fullHeaderPath, std::ios::trunc);
+
+        std::ofstream file(resolveFilepath(headerPath), std::ios::trunc);
         if (!file.is_open()) {
             Out::error("Could not write header file: %s", headerPath.string().c_str());
             return;
         }
-        file << newHeaderText;
-        file.close();
+        file << headerText.substr(0, insertPos) + propCode + headerText.substr(insertPos);
     }
 
-    // Now link the entity to the newly created property
     SceneProject* selectedScene = project->getSelectedScene();
     if (!selectedScene || !selectedScene->scene) return;
 
     uint32_t storedSceneId = (entitySceneId != selectedScene->id) ? entitySceneId : 0;
-
     std::string inMemoryContent = headerInstance ? headerInstance->editor->GetText() : "";
 
-    // Update script properties and link the dropped entity for all entities referencing this header
+    // Refresh every entity referencing this header and link the dropped one
     for (auto& sceneProject : project->getScenes()) {
         if (!sceneProject.scene) continue;
 
@@ -1102,23 +1001,18 @@ void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entit
             if (!scriptComp) continue;
 
             for (size_t si = 0; si < scriptComp->scripts.size(); si++) {
-                auto& scriptEntry = scriptComp->scripts[si];
-                if (scriptEntry.type != ScriptType::CPP) continue;
-                if (scriptEntry.headerPath != headerPath.string()) continue;
+                if (scriptComp->scripts[si].type != ScriptType::CPP) continue;
+                if (scriptComp->scripts[si].headerPath != headerPath.string()) continue;
 
-                // Update properties from the modified header
                 std::vector<ScriptEntry> newScripts = scriptComp->scripts;
-                fs::path fullPath = resolveFilepath(headerPath);
+                project->updateScriptProperties(&sceneProject, sceneEntity, newScripts, inMemoryContent, resolveFilepath(headerPath).string());
 
-                project->updateScriptProperties(&sceneProject, sceneEntity, newScripts, inMemoryContent, fullPath.string());
+                for (ScriptEntry& newScript : newScripts) {
+                    if (newScript.headerPath != headerPath.string()) continue;
 
-                // Find the newly added property by name and set EntityReference
-                for (size_t nsi = 0; nsi < newScripts.size(); nsi++) {
-                    if (newScripts[nsi].headerPath != headerPath.string()) continue;
-                    for (size_t pi = 0; pi < newScripts[nsi].properties.size(); pi++) {
-                        if (newScripts[nsi].properties[pi].name == varName &&
-                            newScripts[nsi].properties[pi].type == ScriptPropertyType::EntityReference) {
-                            newScripts[nsi].properties[pi].value = EntityReference{entity, storedSceneId};
+                    for (ScriptProperty& property : newScript.properties) {
+                        if (property.name == varName && property.type == ScriptPropertyType::EntityReference) {
+                            property.value = EntityReference{entity, storedSceneId};
                             break;
                         }
                     }
@@ -1135,9 +1029,7 @@ void editor::CodeEditor::insertCppEntityProperty(EditorInstance& instance, Entit
 
 std::vector<fs::path> editor::CodeEditor::getOpenPaths() const{
     std::vector<fs::path> openPaths;
-    for (auto it = editors.begin(); it != editors.end(); ++it) {
-        const auto& instance = it->second;
-
+    for (const auto& [key, instance] : editors) {
         openPaths.push_back(instance.filepath);
     }
 
@@ -1165,8 +1057,7 @@ bool editor::CodeEditor::save(EditorInstance& instance) {
             return false;
         }
 
-        std::string text = instance.editor->GetText();
-        file << text;
+        file << instance.editor->GetText();
         file.close();
 
         instance.savedUndoIndex = instance.editor->GetUndoIndex();
@@ -1175,14 +1066,11 @@ bool editor::CodeEditor::save(EditorInstance& instance) {
         instance.lastWriteTime = fs::last_write_time(fullPath);
 
         updateScriptProperties(instance);
-
         updateAllProjectSymbols();
-
         invalidateShadersForFile(instance);
 
         return true;
-    } catch (const std::exception& e) {
-        // Handle file save errors
+    } catch (const std::exception&) {
         return false;
     }
 }
@@ -1194,8 +1082,7 @@ void editor::CodeEditor::saveLastFocused(){
 }
 
 bool editor::CodeEditor::save(const std::string& filepath) {
-    std::string key = toRelativePath(filepath);
-    auto it = editors.find(key);
+    auto it = editors.find(toRelativePath(filepath));
     if (it == editors.end()) {
         return false;
     }
@@ -1257,7 +1144,6 @@ void editor::CodeEditor::openFile(const std::string& filepath, bool dockToCentra
         if (dockToCentral) {
             Backend::getApp().addNewCodeWindowToDock(it->second.filepath, true);
         }
-        // File already open - set this window as focused for the next frame
         ImGui::SetWindowFocus(getWindowTitle(it->second).c_str());
         return;
     }
@@ -1266,28 +1152,8 @@ void editor::CodeEditor::openFile(const std::string& filepath, bool dockToCentra
     instance.filepath = key;
     instance.editor = std::make_unique<CustomTextEditor>();
 
-    // Detect language from extension and filename
-    std::string ext = instance.filepath.extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    std::string filename = instance.filepath.filename().string();
-
-    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c" ||
-        ext == ".hpp" || ext == ".hh" || ext == ".hxx" || ext == ".h" ||
-        ext == ".vert" || ext == ".frag" || ext == ".glsl") {
-        // GLSL shaders reuse the C++ highlighter (close enough syntax)
-        instance.languageType = SyntaxLanguage::Cpp;
-        instance.editor->SetLanguage(SyntaxLanguage::Cpp);
-    } else if (ext == ".lua") {
-        instance.languageType = SyntaxLanguage::Lua;
-        instance.editor->SetLanguage(SyntaxLanguage::Lua);
-    } else if (ext == ".cmake" || filename == "CMakeLists.txt") {
-        instance.languageType = SyntaxLanguage::CMake;
-        instance.editor->SetLanguage(SyntaxLanguage::CMake);
-    } else {
-        // Default to plain text for all other files
-        instance.languageType = SyntaxLanguage::None;
-        instance.editor->SetLanguage(SyntaxLanguage::None);
-    }
+    instance.languageType = languageForPath(instance.filepath);
+    instance.editor->SetLanguage(instance.languageType);
 
     instance.editor->SetTabSize(4);
     instance.editor->SetAutoIndent(true);
@@ -1295,12 +1161,10 @@ void editor::CodeEditor::openFile(const std::string& filepath, bool dockToCentra
     instance.editor->SetMatchBrackets(true);
     instance.editor->SetAutoComplete(true);
     instance.editor->SetFontZoomCallback([](int delta) { applyFontZoom(delta); });
-    // VSCode line height is 1.35x the em size; the pushed ImGui size is em * codeFontEmScale
+    // VSCode line height is 1.35x the em size, the pushed ImGui size is em * codeFontEmScale
     instance.editor->SetLineHeightFactor(1.35f / App::codeFontEmScale);
 
-    // Load the file content
     if (!loadFileContent(instance)) {
-        // If loading fails, remove the instance
         if (lastFocused == &instance) {
             lastFocused = nullptr;
         }
@@ -1331,13 +1195,11 @@ void editor::CodeEditor::closeFile(const std::string& filepath) {
 }
 
 bool editor::CodeEditor::isFileOpen(const std::string& filepath) const {
-    std::string key = toRelativePath(filepath);
-    return editors.find(key) != editors.end();
+    return editors.find(toRelativePath(filepath)) != editors.end();
 }
 
 bool editor::CodeEditor::isFileModified(const std::string& filepath) const {
-    std::string key = toRelativePath(filepath);
-    auto it = editors.find(key);
+    auto it = editors.find(toRelativePath(filepath));
     return it != editors.end() && it->second.isModified;
 }
 
@@ -1349,15 +1211,14 @@ void editor::CodeEditor::setText(const std::string& filepath, const std::string&
         it->second.isModified = false;
         try {
             it->second.lastWriteTime = fs::last_write_time(resolveFilepath(key));
-        } catch (const std::exception& e) {
-            // Handle file access errors
+        } catch (const std::exception&) {
+            // Keeps the previous timestamp, the watcher reloads on the next tick
         }
     }
 }
 
 std::string editor::CodeEditor::getText(const std::string& filepath) const {
-    std::string key = toRelativePath(filepath);
-    if (auto it = editors.find(key); it != editors.end()) {
+    if (auto it = editors.find(toRelativePath(filepath)); it != editors.end()) {
         return it->second.editor->GetText();
     }
     return "";
@@ -1372,33 +1233,35 @@ bool editor::CodeEditor::handleFileRename(const fs::path& oldPath, const fs::pat
         return false;
     }
 
-    // Create new instance with the same editor content
-    EditorInstance newInstance;
-    newInstance.editor = std::move(it->second.editor);
-    newInstance.isOpen = it->second.isOpen;
-    newInstance.filepath = newKey;
-    newInstance.isModified = it->second.isModified;
-    newInstance.lastCheckTime = it->second.lastCheckTime;
-    newInstance.hasExternalChanges = it->second.hasExternalChanges;
-    newInstance.savedUndoIndex = it->second.savedUndoIndex;
-
+    fs::file_time_type newWriteTime;
     try {
-        newInstance.lastWriteTime = fs::last_write_time(resolveFilepath(newKey));
-    } catch (const std::exception& e) {
+        newWriteTime = fs::last_write_time(resolveFilepath(newKey));
+    } catch (const std::exception&) {
         return false;
     }
 
-    // Update lastFocused pointer if it was pointing to the old instance
-    if (lastFocused == &it->second) {
-        editors[newKey] = std::move(newInstance);
-        lastFocused = &editors[newKey];
-        editors.erase(it);
-    } else {
-        editors.erase(it);
-        editors[newKey] = std::move(newInstance);
+    bool wasFocused = (lastFocused == &it->second);
+
+    EditorInstance instance = std::move(it->second);
+    instance.filepath = newKey;
+    instance.lastWriteTime = newWriteTime;
+    editors.erase(it);
+
+    EditorInstance& renamed = editors[newKey];
+    renamed = std::move(instance);
+    if (wasFocused) {
+        lastFocused = &renamed;
     }
 
-    // Update any pending file changes
+    // A new extension needs its own highlighter, and SetLanguage drops the project
+    // symbols the suggestions engine had for this buffer
+    SyntaxLanguage language = languageForPath(newKey);
+    if (language != renamed.languageType) {
+        renamed.languageType = language;
+        renamed.editor->SetLanguage(language);
+        updateAllProjectSymbols();
+    }
+
     auto changeIt = std::remove_if(changedFilesQueue.begin(), changedFilesQueue.end(),
         [&](const PendingFileChange& change) {
             return change.filepath == fs::path(oldKey);
@@ -1417,29 +1280,23 @@ bool editor::CodeEditor::handleFileRename(const fs::path& oldPath, const fs::pat
 void editor::CodeEditor::show() {
     applyParsedProjectSymbols();
 
-    // Get current time
     double currentTime = ImGui::GetTime();
 
     windowFocused = false;
 
-    // Watch script files referenced by entities but not open in the editor, so external
-    // edits (e.g. nano) refresh entity properties without needing to open/save or restart.
     if (currentTime - lastScriptWatchTime >= 1.0) {
         checkExternalScriptChanges();
         lastScriptWatchTime = currentTime;
     }
 
-    // Iterate through all open editors
     for (auto it = editors.begin(); it != editors.end();) {
         auto& instance = it->second;
 
-        // Check for external file changes every second
         if (currentTime - instance.lastCheckTime >= 1.0) {
             checkFileChanges(instance);
             instance.lastCheckTime = currentTime;
         }
 
-        // Create window title using filename
         std::string windowTitle = getWindowTitle(instance);
 
         ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
@@ -1447,7 +1304,7 @@ void editor::CodeEditor::show() {
 
             instance.isModified = instance.editor->GetUndoIndex() != instance.savedUndoIndex;
 
-            // If user undid past a drag-drop property insertion, re-parse from current content
+            // Undone past a drag-drop property insertion, re-parse from the current content
             if (instance.propertyInsertUndoIndex >= 0 &&
                 instance.editor->GetUndoIndex() < instance.propertyInsertUndoIndex) {
                 instance.propertyInsertUndoIndex = -1;
@@ -1456,7 +1313,6 @@ void editor::CodeEditor::show() {
 
             if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
                 windowFocused = true;
-
                 lastFocused = &instance;
             }
 
@@ -1473,37 +1329,30 @@ void editor::CodeEditor::show() {
                 instance.isModified ? "*" : " ");
 
             // Full-height button vertically centered on the status row, overlapping the
-            // spacing above/below so the row keeps its text-only height
+            // spacing above and below so the row keeps its text-only height
             float settingsButtonWidth = ImGui::CalcTextSize(ICON_FA_GEAR).x + ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SameLine(ImGui::GetContentRegionMax().x - settingsButtonWidth);
             ImGui::SetCursorPosY(statusRowY - (ImGui::GetFrameHeight() - ImGui::GetTextLineHeight()) * 0.5f);
             showSettingsButton();
             ImGui::SetCursorPosY(statusRowY + ImGui::GetTextLineHeightWithSpacing());
 
-            // Font size setting is em-based like VSCode; convert to ImGui's line-box-based size
+            // Font size is em-based like VSCode, ImGui sizes by the line box
             ImGui::PushFont(App::getCodeFont(), AppSettings::getCodeEditorFontSize() * App::codeFontEmScale);
             instance.editor->Render("TextEditor");
             ImGui::PopFont();
 
-            // Accept entity drag-drop onto Lua and C++ script editors
             if ((instance.languageType == SyntaxLanguage::Lua || instance.languageType == SyntaxLanguage::Cpp) && ImGui::BeginDragDropTarget()) {
-                // Check if this is a C++ source file (not a header)
-                bool isCppSource = false;
-                if (instance.languageType == SyntaxLanguage::Cpp) {
-                    std::string dropExt = instance.filepath.extension().string();
-                    std::transform(dropExt.begin(), dropExt.end(), dropExt.begin(), ::tolower);
-                    isCppSource = (dropExt != ".h" && dropExt != ".hpp" && dropExt != ".hh" && dropExt != ".hxx");
-                }
+                bool isCppSource = (instance.languageType == SyntaxLanguage::Cpp) && !Util::isHeaderFile(instance.filepath.string());
 
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("entity")) {
                     if (isCppSource) {
                         Backend::getApp().registerAlert("Drop Entity", "Entity properties must be added to the header file (.h), not the source file (.cpp).");
                     } else if (payload->DataSize >= sizeof(EntityPayload)) {
-                        const EntityPayload* ep = static_cast<const EntityPayload*>(payload->Data);
+                        const EntityPayload* entityPayload = static_cast<const EntityPayload*>(payload->Data);
                         if (instance.languageType == SyntaxLanguage::Lua)
-                            insertLuaEntityProperty(instance, ep->entity, ep->entitySceneId);
+                            insertLuaEntityProperty(instance, entityPayload->entity, entityPayload->entitySceneId);
                         else
-                            insertCppEntityProperty(instance, ep->entity, ep->entitySceneId);
+                            insertCppEntityProperty(instance, entityPayload->entity, entityPayload->entitySceneId);
                     }
                 }
                 ImGui::EndDragDropTarget();
@@ -1513,57 +1362,51 @@ void editor::CodeEditor::show() {
         }
         ImGui::End();
 
-        // If the window was closed, remove it from our editors map
-        if (!instance.isOpen) {
-            if (instance.isModified) {
-                // Unsaved changes — show confirmation dialog instead of closing immediately
-                instance.isOpen = true; // Re-open to prevent ImGui from destroying the window
-                std::string closeKey = it->first;
-                std::string windowId = "###" + instance.filepath.string();
-                // Re-focus this window so it stays selected while dialog is shown
-                ImGui::SetWindowFocus(windowId.c_str());
-                Backend::getApp().registerThreeButtonAlert(
-                    "Unsaved Changes",
-                    "\"" + instance.filepath.filename().string() + "\" has unsaved changes. Do you want to save before closing?",
-                    [this, closeKey]() {
-                        // Yes: save then close
-                        if (auto fit = editors.find(closeKey); fit != editors.end()) {
-                            save(fit->second);
-                            if (lastFocused == &fit->second) lastFocused = nullptr;
-                            project->removeTab(TabType::CODE_EDITOR, fit->second.filepath.string());
-                            project->saveProjectFile();
-                            editors.erase(fit);
-                        }
-                    },
-                    [this, closeKey]() {
-                        // No: close without saving, revert properties
-                        if (auto fit = editors.find(closeKey); fit != editors.end()) {
-                            updateScriptProperties(fit->second);
-                            if (lastFocused == &fit->second) lastFocused = nullptr;
-                            project->removeTab(TabType::CODE_EDITOR, fit->second.filepath.string());
-                            project->saveProjectFile();
-                            editors.erase(fit);
-                        }
-                    },
-                    [this, closeKey, windowId]() {
-                        // Cancel: re-focus the window to restore selection
-                        ImGui::SetWindowFocus(windowId.c_str());
-                    }
-                );
-                ++it;
-            } else {
-                if (lastFocused == &instance) {
-                    lastFocused = nullptr;
-                }
-                project->removeTab(TabType::CODE_EDITOR, instance.filepath.string());
-                project->saveProjectFile();
-                it = editors.erase(it);
-            }
-        } else {
+        if (instance.isOpen) {
             ++it;
+            continue;
         }
+
+        if (!instance.isModified) {
+            if (lastFocused == &instance) {
+                lastFocused = nullptr;
+            }
+            project->removeTab(TabType::CODE_EDITOR, instance.filepath.string());
+            project->saveProjectFile();
+            it = editors.erase(it);
+            continue;
+        }
+
+        // Keep the window alive and selected while the confirmation dialog is up
+        instance.isOpen = true;
+        std::string closeKey = it->first;
+        std::string windowId = "###" + instance.filepath.string();
+        ImGui::SetWindowFocus(windowId.c_str());
+
+        auto closeInstance = [this, closeKey](bool saveFirst) {
+            auto fit = editors.find(closeKey);
+            if (fit == editors.end()) return;
+
+            if (saveFirst) {
+                save(fit->second);
+            } else {
+                updateScriptProperties(fit->second);
+            }
+            if (lastFocused == &fit->second) lastFocused = nullptr;
+            project->removeTab(TabType::CODE_EDITOR, fit->second.filepath.string());
+            project->saveProjectFile();
+            editors.erase(fit);
+        };
+
+        Backend::getApp().registerThreeButtonAlert(
+            "Unsaved Changes",
+            "\"" + instance.filepath.filename().string() + "\" has unsaved changes. Do you want to save before closing?",
+            [closeInstance]() { closeInstance(true); },
+            [closeInstance]() { closeInstance(false); },
+            [windowId]() { ImGui::SetWindowFocus(windowId.c_str()); }
+        );
+        ++it;
     }
 
-    // Handle file change popup after all windows are rendered
     handleFileChangePopup();
 }

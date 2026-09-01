@@ -26,6 +26,25 @@ namespace doriax::editor {
 
 namespace {
 
+// Case-folded copy, for case-insensitive search
+std::string toLower(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
+}
+
+// Identifier that ends at endColumn, skipping trailing whitespace
+std::string wordEndingAt(const std::string& line, int endColumn) {
+    int end = std::min(endColumn, static_cast<int>(line.size()) - 1);
+    while (end >= 0 && std::isspace(static_cast<unsigned char>(line[end]))) end--;
+
+    int start = end + 1;
+    while (start > 0 && (std::isalnum(static_cast<unsigned char>(line[start - 1])) || line[start - 1] == '_')) start--;
+
+    if (start > end) return "";
+    return line.substr(start, end - start + 1);
+}
+
 bool isEngineApiConstructorSymbol(const EngineAPISymbol& sym) {
     if (!sym.name || !sym.parent || !sym.detail) return false;
 
@@ -46,33 +65,26 @@ CustomTextEditor::CustomTextEditor()
     , readOnly(false)
     , tabSize(4)
     , showLineNumbers(true)
-    , showWhitespace(false)
     , autoIndent(true)
     , highlightCurrentLine(true)
     , matchBrackets(true)
-    , showMinimap(false)
     , autoComplete(true)
     , isDragging(false)
     , isDraggingText(false)
     , mayDragText(false)
-    , isDoubleClick(false)
-    , isTripleClick(false)
     , clickCount(0)
     , scrollX(0)
     , scrollY(0)
     , showAutoComplete(false)
-    , autoCompleteIndex(0)
     , suggestionIndex(0)
     , suggestionsHovered(false)
     , showParamHint(false)
     , paramHintActiveParam(0)
     , paramHintOverloadIndex(0)
-    , showTooltipFlag(false)
     , currentSearchResult(-1)
     , showFindDialog(false)
     , showReplaceInput(false)
     , findCaseSensitive(false)
-    , findWholeWord(false)
     , charWidth(0)
     , lineHeight(0)
     , lineHeightFactor(1.35f)
@@ -242,21 +254,21 @@ void CustomTextEditor::initializeLanguage() {
 void CustomTextEditor::initializeSuggestions() {
     if (!suggestions) return;
 
-    // Configure the suggestions engine
+    // Snippets and symbols are appended, so a language switch has to drop the old ones
+    suggestions->ClearSnippets();
+    suggestions->ClearSymbols();
+    suggestions->ClearInheritance();
+
     suggestions->SetMinPrefixLength(1);
-    // The popup shows ~10 rows and scrolls; a high cap keeps inherited members
-    // visible (e.g. Text has 15+ direct members that would otherwise crowd out
-    // EntityHandle:getEntity etc.)
+    // The popup scrolls, so a high cap keeps inherited members from being crowded out
     suggestions->SetMaxSuggestions(200);
     suggestions->SetFuzzyMatching(true);
     suggestions->SetCaseSensitive(false);
 
-    // Pass language definitions to suggestions engine
     suggestions->SetKeywords(languageDef.keywords);
     suggestions->SetTypes(languageDef.types);
     suggestions->SetBuiltinFunctions(languageDef.builtinFunctions);
 
-    // Add common snippets for C++
     if (language == SyntaxLanguage::Cpp) {
         suggestions->AddSnippet("if", "if (${1:condition}) {\n\t${2}\n}", "if statement");
         suggestions->AddSnippet("else", "else {\n\t${1}\n}", "else clause");
@@ -316,7 +328,6 @@ void CustomTextEditor::initializeSuggestions() {
         suggestions->AddSnippet("project", "project(${1:name}\n\tVERSION ${2:1.0.0}\n\tLANGUAGES ${3:CXX}\n)", "project definition");
     }
 
-    // Add engine API suggestions for Lua and C++
     if (language == SyntaxLanguage::Lua || language == SyntaxLanguage::Cpp) {
         addEngineAPISuggestions();
     }
@@ -358,7 +369,6 @@ void CustomTextEditor::addEngineAPISuggestions() {
             if (colonPos != std::string::npos) {
                 std::string className = sym.name;
                 std::string parentName = detail.substr(colonPos + 3);
-                // Trim any trailing whitespace
                 while (!parentName.empty() && parentName.back() == ' ') parentName.pop_back();
                 suggestions->SetClassParent(className, parentName);
             }
@@ -383,9 +393,8 @@ const char* CustomTextEditor::GetLanguageName() const {
     }
 }
 
-void CustomTextEditor::SetText(const std::string& text) {
+void CustomTextEditor::setLinesFromText(const std::string& text) {
     lines.clear();
-    lineTokens.clear();
 
     std::string line;
     for (char c : text) {
@@ -397,14 +406,16 @@ void CustomTextEditor::SetText(const std::string& text) {
         }
     }
     lines.push_back(line);
+}
 
+void CustomTextEditor::SetText(const std::string& text) {
+    setLinesFromText(text);
     tokenizeAll();
 
     cursors.clear();
     cursors.push_back(Cursor());
     primaryCursor = 0;
 
-    // Reset scroll position to top
     scrollX = 0;
     scrollY = 0;
 
@@ -421,10 +432,6 @@ std::string CustomTextEditor::GetText() const {
         }
     }
     return result;
-}
-
-std::vector<std::string> CustomTextEditor::GetTextLines() const {
-    return lines;
 }
 
 void CustomTextEditor::SetCursorPosition(int line, int column) {
@@ -545,8 +552,7 @@ void CustomTextEditor::tokenizeLine(int lineIndex) {
     }
 
     while (i < len) {
-        // Skip whitespace
-        if (std::isspace(line[i])) {
+        if (std::isspace(static_cast<unsigned char>(line[i]))) {
             ++i;
             continue;
         }
@@ -628,7 +634,7 @@ void CustomTextEditor::tokenizeLine(int lineIndex) {
         }
 
         // Numbers
-        if (std::isdigit(line[i]) || (line[i] == '.' && i + 1 < len && std::isdigit(line[i + 1]))) {
+        if (std::isdigit(static_cast<unsigned char>(line[i])) || (line[i] == '.' && i + 1 < len && std::isdigit(static_cast<unsigned char>(line[i + 1])))) {
             int start = i;
             bool hasDecimal = false;
             bool hasExponent = false;
@@ -636,10 +642,10 @@ void CustomTextEditor::tokenizeLine(int lineIndex) {
             // Hex prefix
             if (line[i] == '0' && i + 1 < len && (line[i + 1] == 'x' || line[i + 1] == 'X')) {
                 i += 2;
-                while (i < len && std::isxdigit(line[i])) ++i;
+                while (i < len && std::isxdigit(static_cast<unsigned char>(line[i]))) ++i;
             } else {
                 while (i < len) {
-                    if (std::isdigit(line[i])) {
+                    if (std::isdigit(static_cast<unsigned char>(line[i]))) {
                         ++i;
                     } else if (line[i] == '.' && !hasDecimal && !hasExponent) {
                         hasDecimal = true;
@@ -661,16 +667,16 @@ void CustomTextEditor::tokenizeLine(int lineIndex) {
         }
 
         // Identifiers and keywords
-        if (std::isalpha(line[i]) || line[i] == '_') {
+        if (std::isalpha(static_cast<unsigned char>(line[i])) || line[i] == '_') {
             int start = i;
-            while (i < len && (std::isalnum(line[i]) || line[i] == '_')) ++i;
+            while (i < len && (std::isalnum(static_cast<unsigned char>(line[i])) || line[i] == '_')) ++i;
 
             std::string word = line.substr(start, i - start);
             TokenType type = classifyWord(word);
 
-            // Check if followed by '(' to detect function calls
+            // A name followed by '(' is a call
             int j = i;
-            while (j < len && std::isspace(line[j])) ++j;
+            while (j < len && std::isspace(static_cast<unsigned char>(line[j]))) ++j;
             if (j < len && line[j] == '(' && type == TokenType::Identifier) {
                 type = TokenType::Function;
             }
@@ -685,7 +691,6 @@ void CustomTextEditor::tokenizeLine(int lineIndex) {
 
         if (std::strchr(operators, line[i])) {
             int start = i++;
-            // Handle multi-character operators
             while (i < len && std::strchr(operators, line[i])) ++i;
             lineTokens[lineIndex].push_back({start, i - start, TokenType::Operator});
             continue;
@@ -697,7 +702,6 @@ void CustomTextEditor::tokenizeLine(int lineIndex) {
             continue;
         }
 
-        // Default: single character
         lineTokens[lineIndex].push_back({i, 1, TokenType::Default});
         ++i;
     }
@@ -758,20 +762,11 @@ void CustomTextEditor::InsertText(const std::string& text, bool allowAutoIndent)
 
     addUndoRecord();
 
-    // Build sorted index list (ascending by effective edit position)
-    std::vector<size_t> order(cursors.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        auto editStart = [&](const Cursor& c) {
-            return c.selection.isEmpty() ? c.position : c.selection.getMin();
-        };
-        return editStart(cursors[a]) < editStart(cursors[b]);
-    });
+    std::vector<size_t> order = cursorEditOrder();
 
     for (size_t idx = 0; idx < order.size(); ++idx) {
         auto& cursor = cursors[order[idx]];
 
-        // Delete selection first
         if (!cursor.selection.isEmpty()) {
             TextPosition delStart = cursor.selection.getMin();
             TextPosition delEnd = cursor.selection.getMax();
@@ -802,8 +797,6 @@ void CustomTextEditor::InsertText(const std::string& text, bool allowAutoIndent)
     mergeCursors();
     tokenizeAll();
     finalizeUndoRecord();
-
-    if (onTextChanged) onTextChanged();
 }
 
 void CustomTextEditor::insertTextAtCursor(Cursor& cursor, const std::string& text, bool allowAutoIndent) {
@@ -822,7 +815,6 @@ void CustomTextEditor::insertTextAtCursor(Cursor& cursor, const std::string& tex
             ++line;
             col = 0;
 
-            // Auto-indent
             if (autoIndent && allowAutoIndent && line > 0) {
                 int indent = getLineIndent(line - 1);
                 // Increase indent after { or :
@@ -859,14 +851,7 @@ void CustomTextEditor::DeleteSelection() {
 
     addUndoRecord();
 
-    std::vector<size_t> order(cursors.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        auto editStart = [&](const Cursor& c) {
-            return c.selection.isEmpty() ? c.position : c.selection.getMin();
-        };
-        return editStart(cursors[a]) < editStart(cursors[b]);
-    });
+    std::vector<size_t> order = cursorEditOrder();
 
     for (size_t idx = 0; idx < order.size(); ++idx) {
         auto& cursor = cursors[order[idx]];
@@ -887,8 +872,6 @@ void CustomTextEditor::DeleteSelection() {
     mergeCursors();
     tokenizeAll();
     finalizeUndoRecord();
-
-    if (onTextChanged) onTextChanged();
 }
 
 void CustomTextEditor::Backspace() {
@@ -896,14 +879,7 @@ void CustomTextEditor::Backspace() {
 
     addUndoRecord();
 
-    std::vector<size_t> order(cursors.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        auto editStart = [&](const Cursor& c) {
-            return c.selection.isEmpty() ? c.position : c.selection.getMin();
-        };
-        return editStart(cursors[a]) < editStart(cursors[b]);
-    });
+    std::vector<size_t> order = cursorEditOrder();
 
     for (size_t idx = 0; idx < order.size(); ++idx) {
         auto& cursor = cursors[order[idx]];
@@ -949,8 +925,6 @@ void CustomTextEditor::Backspace() {
     mergeCursors();
     tokenizeAll();
     finalizeUndoRecord();
-
-    if (onTextChanged) onTextChanged();
 }
 
 void CustomTextEditor::Delete() {
@@ -958,14 +932,7 @@ void CustomTextEditor::Delete() {
 
     addUndoRecord();
 
-    std::vector<size_t> order(cursors.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        auto editStart = [&](const Cursor& c) {
-            return c.selection.isEmpty() ? c.position : c.selection.getMin();
-        };
-        return editStart(cursors[a]) < editStart(cursors[b]);
-    });
+    std::vector<size_t> order = cursorEditOrder();
 
     for (size_t idx = 0; idx < order.size(); ++idx) {
         auto& cursor = cursors[order[idx]];
@@ -1010,8 +977,6 @@ void CustomTextEditor::Delete() {
     mergeCursors();
     tokenizeAll();
     finalizeUndoRecord();
-
-    if (onTextChanged) onTextChanged();
 }
 
 void CustomTextEditor::DeleteWordLeft() {
@@ -1019,14 +984,7 @@ void CustomTextEditor::DeleteWordLeft() {
 
     addUndoRecord();
 
-    std::vector<size_t> order(cursors.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        auto editStart = [&](const Cursor& c) {
-            return c.selection.isEmpty() ? c.position : c.selection.getMin();
-        };
-        return editStart(cursors[a]) < editStart(cursors[b]);
-    });
+    std::vector<size_t> order = cursorEditOrder();
 
     for (size_t idx = 0; idx < order.size(); ++idx) {
         auto& cursor = cursors[order[idx]];
@@ -1057,8 +1015,6 @@ void CustomTextEditor::DeleteWordLeft() {
     mergeCursors();
     tokenizeAll();
     finalizeUndoRecord();
-
-    if (onTextChanged) onTextChanged();
 }
 
 void CustomTextEditor::DeleteWordRight() {
@@ -1066,14 +1022,7 @@ void CustomTextEditor::DeleteWordRight() {
 
     addUndoRecord();
 
-    std::vector<size_t> order(cursors.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
-        auto editStart = [&](const Cursor& c) {
-            return c.selection.isEmpty() ? c.position : c.selection.getMin();
-        };
-        return editStart(cursors[a]) < editStart(cursors[b]);
-    });
+    std::vector<size_t> order = cursorEditOrder();
 
     for (size_t idx = 0; idx < order.size(); ++idx) {
         auto& cursor = cursors[order[idx]];
@@ -1104,8 +1053,6 @@ void CustomTextEditor::DeleteWordRight() {
     mergeCursors();
     tokenizeAll();
     finalizeUndoRecord();
-
-    if (onTextChanged) onTextChanged();
 }
 
 void CustomTextEditor::deleteRange(const TextPosition& start, const TextPosition& end) {
@@ -1114,7 +1061,6 @@ void CustomTextEditor::deleteRange(const TextPosition& start, const TextPosition
     TextPosition minPos = start < end ? start : end;
     TextPosition maxPos = start < end ? end : start;
 
-    // Bounds checking
     if (minPos.line < 0 || minPos.line >= static_cast<int>(lines.size())) return;
     if (maxPos.line < 0 || maxPos.line >= static_cast<int>(lines.size())) return;
 
@@ -1144,7 +1090,6 @@ std::string CustomTextEditor::getRange(const TextPosition& start, const TextPosi
     TextPosition minPos = start < end ? start : end;
     TextPosition maxPos = start < end ? end : start;
 
-    // Bounds checking
     if (minPos.line < 0 || minPos.line >= static_cast<int>(lines.size())) return "";
     if (maxPos.line < 0 || maxPos.line >= static_cast<int>(lines.size())) return "";
 
@@ -1173,22 +1118,10 @@ void CustomTextEditor::Undo(int steps) {
     for (int i = 0; i < steps && undoIndex > 0; ++i) {
         --undoIndex;
         if (undoIndex < static_cast<int>(undoBuffer.size())) {
-            // Store current state as afterText before restoring
             undoBuffer[undoIndex].afterText = GetText();
             undoBuffer[undoIndex].afterCursors = cursors;
 
-            // Restore previous state
-            lines.clear();
-            std::string line;
-            for (char c : undoBuffer[undoIndex].beforeText) {
-                if (c == '\n') {
-                    lines.push_back(line);
-                    line.clear();
-                } else if (c != '\r') {
-                    line += c;
-                }
-            }
-            lines.push_back(line);
+            setLinesFromText(undoBuffer[undoIndex].beforeText);
             tokenizeAll();
 
             if (!undoBuffer[undoIndex].beforeCursors.empty()) {
@@ -1206,18 +1139,7 @@ void CustomTextEditor::Redo(int steps) {
 
     for (int i = 0; i < steps && undoIndex < static_cast<int>(undoBuffer.size()); ++i) {
         if (!undoBuffer[undoIndex].afterText.empty()) {
-            // Restore after state
-            lines.clear();
-            std::string line;
-            for (char c : undoBuffer[undoIndex].afterText) {
-                if (c == '\n') {
-                    lines.push_back(line);
-                    line.clear();
-                } else if (c != '\r') {
-                    line += c;
-                }
-            }
-            lines.push_back(line);
+            setLinesFromText(undoBuffer[undoIndex].afterText);
             tokenizeAll();
 
             if (!undoBuffer[undoIndex].afterCursors.empty()) {
@@ -1247,9 +1169,8 @@ void CustomTextEditor::addUndoRecord() {
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             record.timestamp - last.timestamp).count();
         if (elapsed < 300 && !last.isMerged) {
-            // Merge: update the merged flag but keep the original beforeText
+            // Keep the previous record and its beforeText, finalize updates its afterText
             last.isMerged = true;
-            // Don't add new record, the previous one will be updated
             return;
         }
     }
@@ -1257,7 +1178,6 @@ void CustomTextEditor::addUndoRecord() {
     undoBuffer.push_back(record);
     ++undoIndex;
 
-    // Limit undo buffer size
     while (undoBuffer.size() > maxUndoSteps) {
         undoBuffer.erase(undoBuffer.begin());
         if (undoIndex > 0) --undoIndex;
@@ -1265,7 +1185,6 @@ void CustomTextEditor::addUndoRecord() {
 }
 
 void CustomTextEditor::finalizeUndoRecord() {
-    // Store the "after" state in the most recent undo record
     if (!undoBuffer.empty() && undoIndex > 0) {
         undoBuffer[undoIndex - 1].afterText = GetText();
         undoBuffer[undoIndex - 1].afterCursors = cursors;
@@ -1275,7 +1194,6 @@ void CustomTextEditor::finalizeUndoRecord() {
 void CustomTextEditor::Copy() {
     std::string text = GetSelectedText();
     if (text.empty()) {
-        // Copy entire line if no selection
         if (!cursors.empty()) {
             int line = cursors[primaryCursor].position.line;
             text = lines[line] + "\n";
@@ -1311,7 +1229,6 @@ void CustomTextEditor::Cut() {
             cursors[primaryCursor].selection.end = cursors[primaryCursor].position;
             tokenizeAll();
             finalizeUndoRecord();
-            if (onTextChanged) onTextChanged();
         }
     }
 }
@@ -1332,7 +1249,6 @@ void CustomTextEditor::SetSearchText(const std::string& text) {
 
 void CustomTextEditor::OpenFind() {
     showFindDialog = true;
-    // Copy selection to search buffer if there's one
     if (HasSelection()) {
         std::string selection = GetSelectedText();
         // Only use single-line selections
@@ -1346,7 +1262,6 @@ void CustomTextEditor::OpenFind() {
 
 void CustomTextEditor::CloseFind() {
     showFindDialog = false;
-    // Clear search highlights
     searchText.clear();
     searchResults.clear();
     currentSearchResult = -1;
@@ -1358,16 +1273,10 @@ void CustomTextEditor::updateSearchResults() {
 
     if (searchText.empty()) return;
 
-    std::string searchLower = searchText;
-    if (!findCaseSensitive) {
-        std::transform(searchLower.begin(), searchLower.end(), searchLower.begin(), ::tolower);
-    }
+    std::string searchLower = findCaseSensitive ? searchText : toLower(searchText);
 
     for (int lineIdx = 0; lineIdx < static_cast<int>(lines.size()); ++lineIdx) {
-        std::string line = lines[lineIdx];
-        if (!findCaseSensitive) {
-            std::transform(line.begin(), line.end(), line.begin(), ::tolower);
-        }
+        std::string line = findCaseSensitive ? lines[lineIdx] : toLower(lines[lineIdx]);
 
         size_t pos = 0;
         while ((pos = line.find(searchLower, pos)) != std::string::npos) {
@@ -1377,7 +1286,7 @@ void CustomTextEditor::updateSearchResults() {
     }
 }
 
-bool CustomTextEditor::ReplaceNext(bool caseSensitive, bool wholeWord) {
+bool CustomTextEditor::ReplaceNext() {
     if (searchText.empty() || readOnly) return false;
 
     TextPosition pMin = cursors[primaryCursor].selection.getMin();
@@ -1386,14 +1295,8 @@ bool CustomTextEditor::ReplaceNext(bool caseSensitive, bool wholeWord) {
     bool match = false;
     if (!cursors[primaryCursor].selection.isEmpty() && pMin.line == pMax.line && static_cast<size_t>(pMax.column - pMin.column) == searchText.size()) {
         std::string selText = lines[pMin.line].substr(pMin.column, searchText.size());
-        std::string cmpText = searchText;
-        if (!caseSensitive) {
-            std::transform(selText.begin(), selText.end(), selText.begin(), ::tolower);
-            std::transform(cmpText.begin(), cmpText.end(), cmpText.begin(), ::tolower);
-        }
-        if (selText == cmpText) {
-            match = true;
-        }
+        match = findCaseSensitive ? (selText == searchText)
+                                  : (toLower(selText) == toLower(searchText));
     }
 
     if (match) {
@@ -1406,10 +1309,10 @@ bool CustomTextEditor::ReplaceNext(bool caseSensitive, bool wholeWord) {
         InsertText(replaceInputBuffer, false);
     }
 
-    return FindNext(caseSensitive, wholeWord);
+    return FindNext();
 }
 
-bool CustomTextEditor::FindNext(bool caseSensitive, bool wholeWord) {
+bool CustomTextEditor::FindNext() {
     if (searchResults.empty()) return false;
 
     TextPosition cursorPos = cursors[primaryCursor].position;
@@ -1425,7 +1328,6 @@ bool CustomTextEditor::FindNext(bool caseSensitive, bool wholeWord) {
             currentSearchResult = static_cast<int>(i);
             SetCursorPosition(searchResults[i].line, searchResults[i].column);
 
-            // Select the found text
             cursors[primaryCursor].selection.start = searchResults[i];
             cursors[primaryCursor].selection.end = TextPosition(
                 searchResults[i].line,
@@ -1456,7 +1358,7 @@ bool CustomTextEditor::FindNext(bool caseSensitive, bool wholeWord) {
     return false;
 }
 
-bool CustomTextEditor::FindPrevious(bool caseSensitive, bool wholeWord) {
+bool CustomTextEditor::FindPrevious() {
     if (searchResults.empty()) return false;
 
     TextPosition cursorPos = cursors[primaryCursor].position;
@@ -1502,52 +1404,26 @@ bool CustomTextEditor::FindPrevious(bool caseSensitive, bool wholeWord) {
     return false;
 }
 
-void CustomTextEditor::SelectAllOccurrences(const std::string& text, bool caseSensitive) {
-    if (text.empty()) return;
-
-    searchText = text;
-    updateSearchResults();
-
-    if (searchResults.empty()) return;
-
-    cursors.clear();
-    for (const auto& result : searchResults) {
-        Cursor cursor;
-        cursor.selection.start = result;
-        cursor.selection.end = TextPosition(result.line, result.column + static_cast<int>(text.size()));
-        cursor.position = cursor.selection.end;
-        cursors.push_back(cursor);
-    }
-    primaryCursor = 0;
-}
-
 int CustomTextEditor::ReplaceAll(const std::string& find, const std::string& replace, bool caseSensitive) {
     if (find.empty() || readOnly) return 0;
 
     addUndoRecord();
 
+    const std::string findText = caseSensitive ? find : toLower(find);
+
     int count = 0;
     for (int lineIdx = static_cast<int>(lines.size()) - 1; lineIdx >= 0; --lineIdx) {
-        std::string lineText = lines[lineIdx];
-        std::string findText = find;
-        if (!caseSensitive) {
-            std::transform(lineText.begin(), lineText.end(), lineText.begin(), ::tolower);
-            std::transform(findText.begin(), findText.end(), findText.begin(), ::tolower);
-        }
+        std::string lineText = caseSensitive ? lines[lineIdx] : toLower(lines[lineIdx]);
+
         size_t pos = lineText.rfind(findText);
         while (pos != std::string::npos) {
             lines[lineIdx].replace(pos, find.size(), replace);
             ++count;
-            if (pos > 0) {
-                // Rebuild lowercase view after replacement
-                lineText = lines[lineIdx];
-                if (!caseSensitive) {
-                    std::transform(lineText.begin(), lineText.end(), lineText.begin(), ::tolower);
-                }
-                pos = lineText.rfind(findText, pos - 1);
-            } else {
-                break;
-            }
+            if (pos == 0) break;
+
+            // The replacement changed the line, so the folded view is rebuilt
+            lineText = caseSensitive ? lines[lineIdx] : toLower(lines[lineIdx]);
+            pos = lineText.rfind(findText, pos - 1);
         }
     }
 
@@ -1555,7 +1431,6 @@ int CustomTextEditor::ReplaceAll(const std::string& find, const std::string& rep
         tokenizeAll();
         finalizeUndoRecord();
         updateSearchResults();
-        if (onTextChanged) onTextChanged();
     }
 
     return count;
@@ -1596,7 +1471,6 @@ void CustomTextEditor::scrollToCursor() {
     float cursorY = cursorPos.line * lineHeight;
     float cursorX = textStartX + cursorPos.column * charWidth;
 
-    // Vertical scrolling using ImGui
     float viewHeight = ImGui::GetWindowHeight();
     if (viewHeight <= 0) viewHeight = 400; // Default fallback
 
@@ -1612,7 +1486,6 @@ void CustomTextEditor::scrollToCursor() {
         ImGui::SetScrollY(newScrollY);
     }
 
-    // Horizontal scrolling using ImGui
     float viewWidth = ImGui::GetWindowWidth();
     if (viewWidth <= 0) viewWidth = 600; // Default fallback
 
@@ -1632,55 +1505,32 @@ void CustomTextEditor::scrollToCursor() {
 void CustomTextEditor::moveSelectedText(const TextPosition& destPos) {
     if (readOnly || cursors.empty()) return;
 
-    // Only handle single selection for now
-    // If multiple selections, we'll just ignore for simplicity or handle first?
-    // Let's iterate and see if mouse is inside ANY selection.
-    // The callers already verified this partially.
-
-    // Find valid selection that we are dragging
-    // With current logic, we likely only support drag drop if we have one or if we treat all as valid.
-
-    // Let's merge cursors first to be safe
     mergeCursors();
-
-    // Find which cursor range we are moving.
-    // Actually, `GetSelectedText` gets ALL text.
-    // Let's implement full logical move.
 
     std::string text = GetSelectedText();
     if (text.empty()) return;
 
-    // Clamp destPos to valid bounds
     TextPosition clampedDest = destPos;
     clampedDest.line = std::clamp(clampedDest.line, 0, static_cast<int>(lines.size()) - 1);
     clampedDest.column = std::clamp(clampedDest.column, 0, static_cast<int>(lines[clampedDest.line].size()));
 
-    // Check if destPos is inside any selection
+    // Dropping inside the selection itself moves nothing
     for (const auto& cursor : cursors) {
         if (!cursor.selection.isEmpty()) {
             TextPosition min = cursor.selection.getMin();
             TextPosition max = cursor.selection.getMax();
-            if (clampedDest >= min && clampedDest < max) return; // Drop inside selection
+            if (clampedDest >= min && clampedDest < max) return;
         }
     }
 
+    // Deleting one selection shifts the others, so only a single one is dragged
+    if (cursors.size() != 1) return;
+
     addUndoRecord();
-
-    // Case: Dest is AFTER all selections
-    // Case: Dest is BEFORE all selections
-    // Case: Mixed.. tricky.
-
-    // Simplest approach: Delete then Insert. Adjust destPos.
-    // This works reliably if we have single selection.
-    // If multiple, deleting earlier ones shifts later ones.
-
-    // Re-verify single cursor support
-    if (cursors.size() != 1) return; // Supporting multi-cursor drag drop is complex
 
     TextPosition start = cursors[0].selection.getMin();
     TextPosition end = cursors[0].selection.getMax();
 
-    // Clamp selection bounds
     start.line = std::clamp(start.line, 0, static_cast<int>(lines.size()) - 1);
     start.column = std::clamp(start.column, 0, static_cast<int>(lines[start.line].size()));
     end.line = std::clamp(end.line, 0, static_cast<int>(lines.size()) - 1);
@@ -1690,57 +1540,51 @@ void CustomTextEditor::moveSelectedText(const TextPosition& destPos) {
 
     deleteRange(start, end);
 
-    // If insertPos was after the deleted range, we need to adjust it
+    // The removed range shifts a destination that came after it
     if (insertPos > start) {
-        if (insertPos.line == end.line) {
-             if (start.line == end.line) {
-                 insertPos.column -= (end.column - start.column);
-             } else {
-                 // dest was on the same line as the end of deletion
-                 // End line is merged into start line.
-                 // The text relative to 'end' is now relative to 'start' + length of start line
-                 // But deleteRange handled the merge.
-
-                 // However, we just have Coordinates.
-                 // We need to map old coordinate to new coordinate.
-
-                 // If insertPos.line was 'end.line', it is now 'start.line'.
-                 // The column was insertPos.column.
-                 // The part of line 'end' AFTER 'end.column' is appended to 'start.line' AFTER 'start.column'.
-                 // So new column = start.column + (insertPos.column - end.column)
-                 insertPos.line = start.line;
-                 insertPos.column = start.column + (insertPos.column - end.column);
-             }
-        } else {
-            // insertPos.line > end.line
-            // Lines deleted = (end.line - start.line)
+        if (insertPos.line != end.line) {
             insertPos.line -= (end.line - start.line);
+        } else if (start.line == end.line) {
+            insertPos.column -= (end.column - start.column);
+        } else {
+            // The tail of the end line is now appended to the start line
+            insertPos.line = start.line;
+            insertPos.column = start.column + (insertPos.column - end.column);
         }
     }
 
-    // Clamp insertPos after adjustments
     insertPos.line = std::clamp(insertPos.line, 0, static_cast<int>(lines.size()) - 1);
     insertPos.column = std::clamp(insertPos.column, 0, static_cast<int>(lines[insertPos.line].size()));
 
-    // Insert text
     cursors.clear();
-    Cursor c;
-    c.position = insertPos;
-    c.selection.start = insertPos;
-    c.selection.end = insertPos;
-    cursors.push_back(c);
+    Cursor cursor;
+    cursor.position = insertPos;
+    cursor.selection.start = insertPos;
+    cursor.selection.end = insertPos;
+    cursors.push_back(cursor);
     primaryCursor = 0;
 
     insertTextAtCursor(cursors[0], text, false);
 
-    // Select the inserted text
     cursors[0].selection.start = insertPos;
-    cursors[0].selection.end = cursors[0].position; // Position moved after insert
+    cursors[0].selection.end = cursors[0].position;
 
     tokenizeAll();
     finalizeUndoRecord();
+}
 
-    if (onTextChanged) onTextChanged();
+std::vector<size_t> CustomTextEditor::cursorEditOrder() const {
+    std::vector<size_t> order(cursors.size());
+    std::iota(order.begin(), order.end(), 0);
+
+    std::sort(order.begin(), order.end(), [this](size_t a, size_t b) {
+        auto editStart = [](const Cursor& cursor) {
+            return cursor.selection.isEmpty() ? cursor.position : cursor.selection.getMin();
+        };
+        return editStart(cursors[a]) < editStart(cursors[b]);
+    });
+
+    return order;
 }
 
 void CustomTextEditor::mergeCursors() {
@@ -1755,7 +1599,6 @@ void CustomTextEditor::mergeCursors() {
         } else {
             auto& last = merged.back();
             if (cursor.position == last.position) {
-                // Merge selections
                 TextPosition minStart = std::min(last.selection.getMin(), cursor.selection.getMin());
                 TextPosition maxEnd = std::max(last.selection.getMax(), cursor.selection.getMax());
                 last.selection.start = minStart;
@@ -1864,7 +1707,7 @@ void CustomTextEditor::moveCursorWord(Cursor& cursor, int direction, bool shift)
 void CustomTextEditor::moveCursorToLineStart(Cursor& cursor, bool shift) {
     int firstNonSpace = 0;
     const std::string& line = lines[cursor.position.line];
-    while (firstNonSpace < static_cast<int>(line.size()) && std::isspace(line[firstNonSpace])) {
+    while (firstNonSpace < static_cast<int>(line.size()) && std::isspace(static_cast<unsigned char>(line[firstNonSpace]))) {
         ++firstNonSpace;
     }
 
@@ -1898,7 +1741,7 @@ void CustomTextEditor::moveCursorToLineEnd(Cursor& cursor, bool shift) {
 }
 
 bool CustomTextEditor::isWordChar(char c) const {
-    return std::isalnum(c) || c == '_';
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
 }
 
 TextPosition CustomTextEditor::findWordStart(const TextPosition& pos) const {
@@ -1933,7 +1776,7 @@ TextPosition CustomTextEditor::findDeleteWordStart(const TextPosition& pos) cons
     TextPosition result = pos;
 
     // A whitespace run goes as a whole, so one press clears an indentation
-    while (result.column > 0 && std::isspace(line[result.column - 1])) {
+    while (result.column > 0 && std::isspace(static_cast<unsigned char>(line[result.column - 1]))) {
         --result.column;
     }
     if (pos.column - result.column > 1) return result;
@@ -1957,7 +1800,7 @@ TextPosition CustomTextEditor::findDeleteWordEnd(const TextPosition& pos) const 
 
     TextPosition result = pos;
 
-    while (result.column < lineSize && std::isspace(line[result.column])) {
+    while (result.column < lineSize && std::isspace(static_cast<unsigned char>(line[result.column]))) {
         ++result.column;
     }
     if (result.column - pos.column > 1) return result;
@@ -2035,18 +1878,16 @@ char CustomTextEditor::findMatchingBracket(const TextPosition& pos, TextPosition
 std::string CustomTextEditor::inferTypeOfVariable(const std::string& varName, int currentLine) const {
     if (varName.empty()) return "";
 
-    // C++ patterns:
-    // 1. Standard declaration: [const] Type [*&] varName
+    // [const] Type [*&] varName
     std::regex cppDeclRegex("(?:const\\s+)?([A-Za-z0-9_:]+)(?:<[^>]*>)?\\s*(?:[*&]+\\s*)?" + varName + "\\b");
-    // 2. auto varName = new Type(...)
+    // auto varName = new Type(...)
     std::regex cppNewRegex("\\bauto\\s*[*&]*\\s*" + varName + "\\s*=\\s*new\\s+([A-Za-z0-9_:]+)");
-    // 3. auto varName = Type(...)  or  auto varName = Type{...}
+    // auto varName = Type(...) or Type{...}
     std::regex cppAutoCtorRegex("\\bauto\\s*[*&]*\\s*" + varName + "\\s*=\\s*([A-Z][A-Za-z0-9_:]*)\\s*[({]");
 
     std::regex luaVarRegex("\\b" + varName + "\\s*=\\s*([A-Za-z0-9_\\.:]+)(?:\\(|\\{)");
     std::regex luaLocalVarRegex("\\blocal\\s+" + varName + "\\s*=\\s*([A-Za-z0-9_\\.:]+)(?:\\(|\\{)");
 
-    // Search backwards from the current line
     for (int i = currentLine; i >= 0; --i) {
         if (i >= static_cast<int>(lines.size())) continue;
         const std::string& line = lines[i];
@@ -2055,15 +1896,13 @@ std::string CustomTextEditor::inferTypeOfVariable(const std::string& varName, in
         std::smatch match;
 
         if (language == SyntaxLanguage::Cpp) {
-            // Try auto = new Type first (most specific)
+            // Most specific first
             if (std::regex_search(line, match, cppNewRegex)) {
                 return match[1].str();
             }
-            // Try auto = Type() / Type{}
             if (std::regex_search(line, match, cppAutoCtorRegex)) {
                 return match[1].str();
             }
-            // Try standard declaration
             if (std::regex_search(line, match, cppDeclRegex)) {
                 std::string typeMatch = match[1].str();
                 if (typeMatch != "return" && typeMatch != "new" && typeMatch != "delete" && typeMatch != "auto") {
@@ -2089,6 +1928,25 @@ std::string CustomTextEditor::inferTypeOfVariable(const std::string& varName, in
     return "";
 }
 
+std::string CustomTextEditor::inferTypeBefore(int lineIndex, int endColumn) const {
+    if (lineIndex < 0 || lineIndex >= static_cast<int>(lines.size())) return "";
+
+    std::string name = wordEndingAt(lines[lineIndex], endColumn);
+    if (name.empty()) return "";
+
+    // A class or enum name used directly is a static access (Engine.setScene, Scaling.NATIVE)
+    if (suggestions && suggestions->IsKnownClassOrEnum(name)) return name;
+
+    std::string type = inferTypeOfVariable(name, lineIndex);
+    if (type.empty() && suggestions) {
+        type = suggestions->FindSymbolType(name);
+    }
+
+    // Engine API parent types are stored without the namespace
+    size_t lastColon = type.rfind(':');
+    return (lastColon != std::string::npos) ? type.substr(lastColon + 1) : type;
+}
+
 SuggestionContext CustomTextEditor::buildSuggestionContext() const {
     SuggestionContext ctx;
 
@@ -2098,11 +1956,9 @@ SuggestionContext CustomTextEditor::buildSuggestionContext() const {
 
     const TextPosition& pos = cursors[primaryCursor].position;
 
-    // Get current word being typed
     TextPosition wordStart = findWordStart(pos);
     ctx.currentWord = getRange(wordStart, pos);
 
-    // Get line content
     if (pos.line >= 0 && pos.line < static_cast<int>(lines.size())) {
         ctx.lineContent = lines[pos.line];
     }
@@ -2131,44 +1987,22 @@ SuggestionContext CustomTextEditor::buildSuggestionContext() const {
         }
     }
 
-    // Get previous word for context (e.g. before the dot)
+    // The word before the accessor is what member completion resolves against
     if (checkCol > 0) {
         TextPosition prevEnd(pos.line, checkCol - 1);
-        // Skip whitespace if any
-        while (prevEnd.column > 0 && std::isspace(ctx.lineContent[prevEnd.column])) {
+        while (prevEnd.column > 0 && std::isspace(static_cast<unsigned char>(ctx.lineContent[prevEnd.column]))) {
             prevEnd.column--;
         }
-        if (prevEnd.column >= 0 && (std::isalnum(ctx.lineContent[prevEnd.column]) || ctx.lineContent[prevEnd.column] == '_')) {
+        if (prevEnd.column >= 0 && (std::isalnum(static_cast<unsigned char>(ctx.lineContent[prevEnd.column])) || ctx.lineContent[prevEnd.column] == '_')) {
             TextPosition prevStart = findWordStart(TextPosition(pos.line, prevEnd.column + 1));
             // getRange uses end column generically as exclusive bound, so we use prevEnd.column+1
             ctx.previousWord = getRange(prevStart, TextPosition(pos.line, prevEnd.column + 1));
         }
     }
 
-    // Infer the type of the previous word for semantic suggestions
-    if (ctx.afterDot || ctx.afterArrow || ctx.afterDoubleColon || ctx.afterColon) {
-        if (!ctx.previousWord.empty()) {
-            if (ctx.afterDoubleColon) {
-                // For ::, the previousWord IS the type name (e.g. Vector3::ZERO)
-                ctx.targetType = ctx.previousWord;
-            } else if (suggestions && suggestions->IsKnownClassOrEnum(ctx.previousWord)) {
-                // Static access on a class/enum name itself (e.g. Engine.setScene, Scaling.NATIVE)
-                ctx.targetType = ctx.previousWord;
-            } else {
-                ctx.targetType = inferTypeOfVariable(ctx.previousWord, pos.line);
-                // Fallback: look up the variable in project symbols (e.g. header member variables)
-                if (ctx.targetType.empty() && suggestions) {
-                    ctx.targetType = suggestions->FindSymbolType(ctx.previousWord);
-                }
-            }
-            // Strip namespace prefix for matching engine API parent types (e.g. "doriax::Mesh" -> "Mesh")
-            if (!ctx.targetType.empty()) {
-                size_t lastColon = ctx.targetType.rfind(':');
-                if (lastColon != std::string::npos) {
-                    ctx.targetType = ctx.targetType.substr(lastColon + 1);
-                }
-            }
-        }
+    if ((ctx.afterDot || ctx.afterArrow || ctx.afterDoubleColon || ctx.afterColon) && !ctx.previousWord.empty()) {
+        // After '::' the previous word already is the type name (Vector3::ZERO)
+        ctx.targetType = ctx.afterDoubleColon ? ctx.previousWord : inferTypeBefore(pos.line, checkCol - 1);
     }
 
     return ctx;
@@ -2187,7 +2021,6 @@ void CustomTextEditor::TriggerAutoComplete(bool manualInvoke) {
 void CustomTextEditor::CloseAutoComplete() {
     showAutoComplete = false;
     currentSuggestions.clear();
-    autoCompleteItems.clear();
 }
 
 void CustomTextEditor::triggerParamHint() {
@@ -2230,10 +2063,9 @@ void CustomTextEditor::triggerParamHint() {
     // Extract function name before the '('
     const std::string& funcLine = lines[searchLine];
     int nameEnd = openParenCol;
-    // Skip whitespace before '('
-    while (nameEnd > 0 && std::isspace(funcLine[nameEnd - 1])) nameEnd--;
+    while (nameEnd > 0 && std::isspace(static_cast<unsigned char>(funcLine[nameEnd - 1]))) nameEnd--;
     int nameStart = nameEnd;
-    while (nameStart > 0 && (std::isalnum(funcLine[nameStart - 1]) || funcLine[nameStart - 1] == '_')) nameStart--;
+    while (nameStart > 0 && (std::isalnum(static_cast<unsigned char>(funcLine[nameStart - 1])) || funcLine[nameStart - 1] == '_')) nameStart--;
     std::string funcName = funcLine.substr(nameStart, nameEnd - nameStart);
 
     if (funcName.empty()) {
@@ -2241,59 +2073,20 @@ void CustomTextEditor::triggerParamHint() {
         return;
     }
 
-    // Try to find the parent type (check for . or : or -> before funcName)
+    // The accessor before the name gives the parent type
     std::string parentType;
     int beforeFunc = nameStart - 1;
-    // Skip whitespace
-    while (beforeFunc >= 0 && std::isspace(funcLine[beforeFunc])) beforeFunc--;
+    while (beforeFunc >= 0 && std::isspace(static_cast<unsigned char>(funcLine[beforeFunc]))) beforeFunc--;
+
     if (beforeFunc >= 0) {
         char accessor = funcLine[beforeFunc];
-        if (accessor == '.' || accessor == ':') {
-            int varEnd = beforeFunc;
-            if (accessor == ':' && beforeFunc > 0 && funcLine[beforeFunc - 1] == ':') {
-                // :: static call - the thing before is the type itself
-                varEnd = beforeFunc - 2;
-                while (varEnd >= 0 && std::isspace(funcLine[varEnd])) varEnd--;
-                int varStart = varEnd + 1;
-                while (varStart > 0 && (std::isalnum(funcLine[varStart - 1]) || funcLine[varStart - 1] == '_')) varStart--;
-                parentType = funcLine.substr(varStart, varEnd - varStart + 1);
-            } else {
-                // . or single : (Lua method call)
-                varEnd = beforeFunc - 1;
-                while (varEnd >= 0 && std::isspace(funcLine[varEnd])) varEnd--;
-                int varStart = varEnd + 1;
-                while (varStart > 0 && (std::isalnum(funcLine[varStart - 1]) || funcLine[varStart - 1] == '_')) varStart--;
-                std::string varName = funcLine.substr(varStart, varEnd - varStart + 1);
-                if (suggestions && suggestions->IsKnownClassOrEnum(varName)) {
-                    // Static call on a class name itself (e.g. Engine.setScene)
-                    parentType = varName;
-                } else {
-                    parentType = inferTypeOfVariable(varName, searchLine);
-                    if (parentType.empty() && suggestions) {
-                        parentType = suggestions->FindSymbolType(varName);
-                    }
-                    // Strip namespace
-                    size_t lastColon = parentType.rfind(':');
-                    if (lastColon != std::string::npos) {
-                        parentType = parentType.substr(lastColon + 1);
-                    }
-                }
-            }
+        if (accessor == ':' && beforeFunc > 0 && funcLine[beforeFunc - 1] == ':') {
+            // Static call, the name before '::' is the type itself
+            parentType = wordEndingAt(funcLine, beforeFunc - 2);
+        } else if (accessor == '.' || accessor == ':') {
+            parentType = inferTypeBefore(searchLine, beforeFunc - 1);
         } else if (accessor == '>' && beforeFunc > 0 && funcLine[beforeFunc - 1] == '-') {
-            // -> operator
-            int varEnd = beforeFunc - 2;
-            while (varEnd >= 0 && std::isspace(funcLine[varEnd])) varEnd--;
-            int varStart = varEnd + 1;
-            while (varStart > 0 && (std::isalnum(funcLine[varStart - 1]) || funcLine[varStart - 1] == '_')) varStart--;
-            std::string varName = funcLine.substr(varStart, varEnd - varStart + 1);
-            parentType = inferTypeOfVariable(varName, searchLine);
-            if (parentType.empty() && suggestions) {
-                parentType = suggestions->FindSymbolType(varName);
-            }
-            size_t lastColon = parentType.rfind(':');
-            if (lastColon != std::string::npos) {
-                parentType = parentType.substr(lastColon + 1);
-            }
+            parentType = inferTypeBefore(searchLine, beforeFunc - 2);
         }
     }
 
@@ -2330,9 +2123,9 @@ void CustomTextEditor::updateParamHint() {
 
     // Verify the function name before the anchor is still the same
     int nameEnd = paramHintAnchor.column;
-    while (nameEnd > 0 && std::isspace(anchorLine[nameEnd - 1])) nameEnd--;
+    while (nameEnd > 0 && std::isspace(static_cast<unsigned char>(anchorLine[nameEnd - 1]))) nameEnd--;
     int nameStart = nameEnd;
-    while (nameStart > 0 && (std::isalnum(anchorLine[nameStart - 1]) || anchorLine[nameStart - 1] == '_')) nameStart--;
+    while (nameStart > 0 && (std::isalnum(static_cast<unsigned char>(anchorLine[nameStart - 1])) || anchorLine[nameStart - 1] == '_')) nameStart--;
     std::string currentFuncName = anchorLine.substr(nameStart, nameEnd - nameStart);
 
     if (currentFuncName != paramHintFuncName) {
@@ -2340,7 +2133,6 @@ void CustomTextEditor::updateParamHint() {
         return;
     }
 
-    // Cursor must be after the '(' anchor
     if (pos < paramHintAnchor || (pos.line == paramHintAnchor.line && pos.column <= paramHintAnchor.column)) {
         closeParamHint();
         return;
@@ -2361,10 +2153,8 @@ void CustomTextEditor::updateParamHint() {
         for (int c = colStart; c < colEnd && c < static_cast<int>(line.size()); ++c) {
             char ch = line[c];
 
-            // Handle string literals
             if (inString) {
                 if (ch == stringQuote) {
-                    // Check if it's escaped (simple check, doesn't handle \\" correctly but usually fine for args)
                     if (c == 0 || line[c - 1] != '\\') {
                         inString = false;
                     }
@@ -2402,7 +2192,6 @@ void CustomTextEditor::closeParamHint() {
 void CustomTextEditor::renderParamHint(const ImVec2& origin) {
     if (!showParamHint || paramHintSignatures.empty()) return;
 
-    // Bounds-check overload index
     if (paramHintOverloadIndex >= static_cast<int>(paramHintSignatures.size())) {
         paramHintOverloadIndex = 0;
     }
@@ -2435,7 +2224,6 @@ void CustomTextEditor::renderParamHint(const ImVec2& origin) {
         params.push_back(current);
     }
 
-    // Trim leading/trailing whitespace from each param
     for (auto& p : params) {
         size_t start = p.find_first_not_of(' ');
         size_t end = p.find_last_not_of(' ');
@@ -2446,11 +2234,9 @@ void CustomTextEditor::renderParamHint(const ImVec2& origin) {
     ImVec2 screenPos = textToScreen(paramHintAnchor, origin);
     screenPos.y -= lineHeight + 4.0f;
 
-    // Calculate size
     ImFont* font = ImGui::GetFont();
     float fontSize = ImGui::GetFontSize();
 
-    // Build text measurement
     std::string fullText = funcPrefix;
     for (size_t i = 0; i < params.size(); i++) {
         if (i > 0) fullText += ", ";
@@ -2458,7 +2244,6 @@ void CustomTextEditor::renderParamHint(const ImVec2& origin) {
     }
     fullText += ")";
 
-    // Overload indicator
     std::string overloadText;
     if (paramHintSignatures.size() > 1) {
         overloadText = std::to_string(paramHintOverloadIndex + 1) + "/" + std::to_string(paramHintSignatures.size());
@@ -2503,11 +2288,9 @@ void CustomTextEditor::renderParamHint(const ImVec2& origin) {
 
         float x = textPos.x;
 
-        // Draw function prefix
         drawList->AddText(font, fontSize, ImVec2(x, textPos.y), normalColor, funcPrefix.c_str());
         x += font->CalcTextSizeA(fontSize, FLT_MAX, 0, funcPrefix.c_str()).x;
 
-        // Draw each parameter
         for (size_t i = 0; i < params.size(); i++) {
             if (i > 0) {
                 drawList->AddText(font, fontSize, ImVec2(x, textPos.y), normalColor, ", ");
@@ -2522,7 +2305,6 @@ void CustomTextEditor::renderParamHint(const ImVec2& origin) {
             float paramWidth = font->CalcTextSizeA(fontSize, FLT_MAX, 0, param.c_str()).x;
 
             if (isActive) {
-                // Draw underline for active param
                 float underlineY = textPos.y + fontSize + 1.0f;
                 drawList->AddLine(ImVec2(x, underlineY), ImVec2(x + paramWidth, underlineY), activeUnderline, 2.0f);
             }
@@ -2530,11 +2312,9 @@ void CustomTextEditor::renderParamHint(const ImVec2& origin) {
             x += paramWidth;
         }
 
-        // Draw closing paren
         drawList->AddText(font, fontSize, ImVec2(x, textPos.y), normalColor, ")");
         x += font->CalcTextSizeA(fontSize, FLT_MAX, 0, ")").x;
 
-        // Draw overload indicator
         if (!overloadText.empty()) {
             x += 12.0f;
             ImU32 dimColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
@@ -2553,7 +2333,6 @@ void CustomTextEditor::UpdateProjectSymbols(const std::vector<ProjectSymbol>& sy
     suggestions->ClearSymbols();
     suggestions->ClearInheritance();
 
-    // Re-add engine API symbols
     if (language == SyntaxLanguage::Lua || language == SyntaxLanguage::Cpp) {
         addEngineAPISuggestions();
     }
@@ -2570,10 +2349,9 @@ void CustomTextEditor::UpdateProjectSymbols(const std::vector<ProjectSymbol>& sy
         return keys;
     }();
 
-    // Add pre-parsed project symbols
     for (const auto& sym : symbols) {
         if (engineKeys.find(sym.name + "\x1f" + sym.parentType) != engineKeys.end()) continue;
-        suggestions->AddSymbol(sym.name, static_cast<SuggestionKind>(sym.kind), sym.detail, sym.parentType, sym.typeInfo);
+        suggestions->AddSymbol(sym.name, sym.kind, sym.detail, sym.parentType, sym.typeInfo);
     }
 }
 
@@ -2595,18 +2373,14 @@ bool CustomTextEditor::isInCommentOrString(const TextPosition& pos) const {
 void CustomTextEditor::updateSuggestions(bool manualInvoke) {
     if (!suggestions || cursors.empty()) return;
 
-    // No suggestions inside comments or string literals
     if (isInCommentOrString(cursors[primaryCursor].position)) {
         currentSuggestions.clear();
-        autoCompleteItems.clear();
         showAutoComplete = false;
         return;
     }
 
-    // Update document words in the suggestions engine
     suggestions->UpdateDocumentWords(lines);
 
-    // Build context and get suggestions
     SuggestionContext ctx = buildSuggestionContext();
     ctx.manualInvoke = manualInvoke;
     autoCompleteAnchor = findWordStart(cursors[primaryCursor].position);
@@ -2618,91 +2392,12 @@ void CustomTextEditor::updateSuggestions(bool manualInvoke) {
         showAutoComplete = false;
     }
 
-    // Every content refilter (typing forward or backspace) re-ranks the list,
-    // so snap the selection back to the best match at the top and scroll it into
-    // view — matching VSCode, where each keystroke selects the top result.
+    // Every refilter re-ranks the list, so the selection snaps back to the best
+    // match at the top, like VSCode does on each keystroke
     if (!currentSuggestions.empty()) {
         suggestionIndex = 0;
         scrollToSuggestion = true;
     }
-
-    // Also populate the old autoCompleteItems for backward compatibility
-    autoCompleteItems.clear();
-    for (const auto& sugg : currentSuggestions) {
-        AutoCompleteItem item;
-        item.label = sugg.label;
-        item.insertText = sugg.insertText;
-        item.detail = sugg.detail;
-        // Map suggestion kind to token type for compatibility
-        switch (sugg.kind) {
-            case SuggestionKind::Keyword: item.kind = TokenType::Keyword; break;
-            case SuggestionKind::Type: item.kind = TokenType::Type; break;
-            case SuggestionKind::Function: 
-            case SuggestionKind::Method: item.kind = TokenType::Function; break;
-            default: item.kind = TokenType::Identifier; break;
-        }
-        autoCompleteItems.push_back(item);
-    }
-}
-
-void CustomTextEditor::updateAutoComplete() {
-    updateSuggestions();
-}
-
-std::vector<AutoCompleteItem> CustomTextEditor::getCompletionItems(const std::string& prefix) const {
-    // This method is kept for backward compatibility
-    // The new system uses updateSuggestions() instead
-    std::vector<AutoCompleteItem> items;
-
-    auto addItems = [&](const std::unordered_set<std::string>& source, TokenType kind) {
-        for (const auto& word : source) {
-            if (prefix.empty() || word.find(prefix) == 0) {
-                AutoCompleteItem item;
-                item.label = word;
-                item.insertText = word;
-                item.kind = kind;
-                items.push_back(item);
-            }
-        }
-    };
-
-    addItems(languageDef.keywords, TokenType::Keyword);
-    addItems(languageDef.types, TokenType::Type);
-    addItems(languageDef.builtinFunctions, TokenType::Function);
-
-    // Add words from the document
-    std::unordered_set<std::string> documentWords;
-    for (const auto& line : lines) {
-        size_t i = 0;
-        while (i < line.size()) {
-            if (isWordChar(line[i])) {
-                size_t start = i;
-                while (i < line.size() && isWordChar(line[i])) ++i;
-                std::string word = line.substr(start, i - start);
-                if (word.size() >= 3 && word != prefix) {
-                    documentWords.insert(word);
-                }
-            } else {
-                ++i;
-            }
-        }
-    }
-    addItems(documentWords, TokenType::Identifier);
-
-    // Sort by relevance
-    std::sort(items.begin(), items.end(), [&prefix](const AutoCompleteItem& a, const AutoCompleteItem& b) {
-        bool aStartsWith = a.label.find(prefix) == 0;
-        bool bStartsWith = b.label.find(prefix) == 0;
-        if (aStartsWith != bStartsWith) return aStartsWith;
-        return a.label < b.label;
-    });
-
-    // Limit results
-    if (items.size() > 20) {
-        items.resize(20);
-    }
-
-    return items;
 }
 
 void CustomTextEditor::applySuggestion() {
@@ -2721,24 +2416,21 @@ void CustomTextEditor::applySuggestion() {
     cursors[primaryCursor].selection.start = delStart;
     cursors[primaryCursor].selection.end = delStart;
 
-    // Adjust other cursors after deletion
     for (size_t i = 0; i < cursors.size(); ++i) {
         if (static_cast<int>(i) != primaryCursor) {
             adjustCursorAfterDelete(cursors[i], delStart, delEnd);
         }
     }
 
-    // Process snippet placeholders (simple version - just remove ${n:text} markers)
+    // Snippet placeholders are reduced to their default text, ${n:text} -> text
     std::string textToInsert = item.insertText;
     std::string processed;
     size_t i = 0;
     while (i < textToInsert.size()) {
         if (textToInsert[i] == '$' && i + 1 < textToInsert.size() && textToInsert[i + 1] == '{') {
-            // Find the matching }
             size_t start = i + 2;
             size_t end = textToInsert.find('}', start);
             if (end != std::string::npos) {
-                // Extract content after : if present
                 std::string placeholder = textToInsert.substr(start, end - start);
                 size_t colonPos = placeholder.find(':');
                 if (colonPos != std::string::npos) {
@@ -2757,7 +2449,6 @@ void CustomTextEditor::applySuggestion() {
     insertTextAtCursor(cursors[primaryCursor], processed, false);
     TextPosition afterPos = cursors[primaryCursor].position;
 
-    // Adjust other cursors after insertion
     for (size_t i = 0; i < cursors.size(); ++i) {
         if (static_cast<int>(i) != primaryCursor) {
             adjustCursorAfterInsert(cursors[i], insertPos, afterPos);
@@ -2768,23 +2459,6 @@ void CustomTextEditor::applySuggestion() {
     tokenizeAll();
     finalizeUndoRecord();
     CloseAutoComplete();
-
-    if (onTextChanged) onTextChanged();
-}
-
-void CustomTextEditor::applyAutoComplete() {
-    applySuggestion();
-}
-
-void CustomTextEditor::ShowTooltip(const std::string& text, const ImVec2& pos) {
-    tooltipText = text;
-    tooltipPos = pos;
-    showTooltipFlag = true;
-    tooltipStartTime = std::chrono::steady_clock::now();
-}
-
-void CustomTextEditor::HideTooltip() {
-    showTooltipFlag = false;
 }
 
 TextPosition CustomTextEditor::screenToText(const ImVec2& screenPos, const ImVec2& origin) const {
@@ -2843,7 +2517,6 @@ void CustomTextEditor::handleKeyboardInput() {
         }
     }
 
-    // Handle param hint Escape and overload cycling
     if (showParamHint && !showAutoComplete) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             closeParamHint();
@@ -2862,7 +2535,6 @@ void CustomTextEditor::handleKeyboardInput() {
         }
     }
 
-    // Handle special keys
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         ClearExtraCursors();
         ClearSelection();
@@ -2927,7 +2599,6 @@ void CustomTextEditor::handleKeyboardInput() {
                 // Find next occurrence and add cursor (with wrap-around)
                 TextPosition searchStart = cursors.back().selection.getMax();
                 bool found = false;
-                // Search forward from last cursor
                 for (int line = searchStart.line; line < static_cast<int>(lines.size()) && !found; ++line) {
                     size_t startCol = (line == searchStart.line) ? searchStart.column : 0;
                     size_t pos = lines[line].find(word, startCol);
@@ -2963,7 +2634,6 @@ void CustomTextEditor::handleKeyboardInput() {
         }
     }
 
-    // Cursor movement
     if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) {
         for (auto& cursor : cursors) {
             if (!shift && !cursor.selection.isEmpty()) {
@@ -2974,7 +2644,6 @@ void CustomTextEditor::handleKeyboardInput() {
                 cursor.selection.end = minPos;
                 cursor.preferredColumn = -1;
                 if (ctrl) {
-                    // After collapsing, also move word-left
                     moveCursorWord(cursor, -1, false);
                 }
             } else if (ctrl) {
@@ -2997,7 +2666,6 @@ void CustomTextEditor::handleKeyboardInput() {
                 cursor.selection.end = maxPos;
                 cursor.preferredColumn = -1;
                 if (ctrl) {
-                    // After collapsing, also move word-right
                     moveCursorWord(cursor, 1, false);
                 }
             } else if (ctrl) {
@@ -3102,7 +2770,6 @@ void CustomTextEditor::handleKeyboardInput() {
         scrollToCursor();
     }
 
-    // Editing keys
     if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !readOnly) {
         if (ctrl) {
             DeleteWordLeft();
@@ -3110,7 +2777,7 @@ void CustomTextEditor::handleKeyboardInput() {
             Backspace();
         }
         scrollToCursor();
-        if (showAutoComplete) updateAutoComplete();
+        if (showAutoComplete) updateSuggestions();
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Delete) && !readOnly) {
@@ -3137,32 +2804,20 @@ void CustomTextEditor::handleKeyboardInput() {
                         (prevChar == '[' && nextChar == ']') ||
                         (prevChar == '(' && nextChar == ')')) {
 
-                        // Break open the brackets
-                        // 1. Insert indented newline
+                        // Break the brackets open: an indented line for the content
+                        // and one for the closing bracket
                         InsertText("\n", true);
-
-                        // 2. Insert another newline for the closing bracket (no auto-indent)
                         InsertText("\n", false);
 
-                        // 3. Fix indentation of closing bracket to match the parent line
-                        // The parent line is now 2 lines above
                         int closingBracketLine = cursors[0].position.line;
                         int parentLine = closingBracketLine - 2;
 
                         if (parentLine >= 0) {
-                            // Calculate base indent
-                            int baseIndent = getLineIndent(parentLine);
-                            std::string indentStr = getIndentString(baseIndent);
-
-                            // Apply indent to closing bracket line
-                            // Move cursor to start of line
                             SetCursorPosition(closingBracketLine, 0);
-                            InsertText(indentStr, false);
+                            InsertText(getIndentString(getLineIndent(parentLine)), false);
 
-                            // 4. Move cursor back to the middle line (the indented content line)
                             int contentLine = closingBracketLine - 1;
-                            int contentCol = lines[contentLine].size();
-                            SetCursorPosition(contentLine, contentCol);
+                            SetCursorPosition(contentLine, static_cast<int>(lines[contentLine].size()));
                         }
 
                         handled = true;
@@ -3243,7 +2898,6 @@ void CustomTextEditor::handleKeyboardInput() {
                 if (changed) {
                     tokenizeAll();
                     finalizeUndoRecord();
-                    if (onTextChanged) onTextChanged();
                 }
             } else {
                 InsertText(std::string(tabSize, ' '));
@@ -3256,7 +2910,6 @@ void CustomTextEditor::handleKeyboardInput() {
         TriggerAutoComplete(true);
     }
 
-    // Update param hint after any cursor movement
     if (showParamHint) {
         updateParamHint();
     }
@@ -3389,7 +3042,6 @@ void CustomTextEditor::handleMouseInput() {
         CloseAutoComplete();
     }
 
-    // Handle drag initiation
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
         if (mayDragText && !isDraggingText) {
              isDraggingText = true;
@@ -3432,9 +3084,6 @@ void CustomTextEditor::handleMouseInput() {
         isDragging = false;
     }
 
-    // Mouse wheel scrolling is handled by ImGui automatically
-
-    // Update param hint after mouse clicks may move cursor
     if (showParamHint && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         updateParamHint();
     }
@@ -3452,12 +3101,10 @@ void CustomTextEditor::handleTextInput() {
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // Handle text input
     if (io.InputQueueCharacters.Size > 0) {
         for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
             ImWchar c = io.InputQueueCharacters[i];
 
-            // Filter out control characters
             if (c < 32 && c != '\t' && c != '\n') continue;
             if (c >= 127 && c < 256) continue;
 
@@ -3481,7 +3128,6 @@ void CustomTextEditor::handleTextInput() {
                     mergeCursors();
                     handled = true;
 
-                    // Update param hint after ')' overtype
                     if (ch == ')' && showParamHint) {
                         updateParamHint();
                     }
@@ -3506,30 +3152,24 @@ void CustomTextEditor::handleTextInput() {
                 // Auto-close brackets
                 if (c == '(' || c == '[' || c == '{') {
                     char closing = getMatchingBracket(static_cast<char>(c));
-                    // Store position, insert, then restore
-                    // We want cursor BETWEEN brackets, so we use the position returned by the first InsertText
-                    auto positions = cursors; 
 
+                    // The cursors go back between the brackets after the closing one is typed
+                    auto positions = cursors;
                     InsertText(std::string(1, closing), false);
-
-                    // Restore cursors to 'positions' (between the brackets)
                     for (size_t j = 0; j < cursors.size() && j < positions.size(); ++j) {
                         cursors[j] = positions[j];
                     }
 
-                    // Trigger parameter hints after '('
                     if (c == '(') {
                         triggerParamHint();
                     }
                 } else if (showParamHint) {
-                    // Update param hint when typing inside a function call
                     updateParamHint();
                 }
 
-                // Update auto-complete
                 bool shouldTrigger = false;
                 if (autoComplete) {
-                    if (std::isalnum(c) || c == '_' || c == '.' || c == ':') {
+                    if ((c < 128 && std::isalnum(static_cast<unsigned char>(c))) || c == '_' || c == '.' || c == ':') {
                         shouldTrigger = true;
                     } else if (c == '>' && language == SyntaxLanguage::Cpp) {
                         // Trigger for '->' operator
@@ -3544,14 +3184,11 @@ void CustomTextEditor::handleTextInput() {
                 if (shouldTrigger) {
                     TriggerAutoComplete();
                 } else if (showAutoComplete) {
-                    // Close autocomplete when typing non-identifier characters
-                    // like space, parentheses, operators, etc.
                     CloseAutoComplete();
                 }
             }
         }
 
-        // Scroll to cursor after text input
         scrollToCursor();
     }
 }
@@ -3620,29 +3257,27 @@ void CustomTextEditor::renderSearchHighlights(ImDrawList* drawList, const ImVec2
 }
 
 void CustomTextEditor::renderText(ImDrawList* drawList, const ImVec2& origin, int startLine, int endLine) {
+    static const std::vector<Token> noTokens;
+
     for (int i = startLine; i <= endLine && i < static_cast<int>(lines.size()); ++i) {
         float y = origin.y + i * lineHeight + textOffsetY;
         float x = origin.x + textStartX;
 
         const std::string& line = lines[i];
-        const auto& tokens = (i < static_cast<int>(lineTokens.size())) ? lineTokens[i] : std::vector<Token>();
+        const auto& tokens = (i < static_cast<int>(lineTokens.size())) ? lineTokens[i] : noTokens;
 
         if (tokens.empty()) {
-            // Render entire line in default color
             ImU32 color = ImGui::ColorConvertFloat4ToU32(palette[static_cast<int>(TokenType::Default)]);
             drawList->AddText(ImVec2(x, y), color, line.c_str());
         } else {
-            // Render tokens
             int lastEnd = 0;
             for (const auto& token : tokens) {
-                // Render any gap before this token
                 if (token.start > lastEnd) {
                     std::string gap = line.substr(lastEnd, token.start - lastEnd);
                     ImU32 color = ImGui::ColorConvertFloat4ToU32(palette[static_cast<int>(TokenType::Default)]);
                     drawList->AddText(ImVec2(x + lastEnd * charWidth, y), color, gap.c_str());
                 }
 
-                // Render the token
                 std::string tokenText = line.substr(token.start, token.length);
                 ImU32 color = ImGui::ColorConvertFloat4ToU32(palette[static_cast<int>(token.type)]);
                 drawList->AddText(ImVec2(x + token.start * charWidth, y), color, tokenText.c_str());
@@ -3650,7 +3285,6 @@ void CustomTextEditor::renderText(ImDrawList* drawList, const ImVec2& origin, in
                 lastEnd = token.start + token.length;
             }
 
-            // Render any remaining text
             if (lastEnd < static_cast<int>(line.size())) {
                 std::string remaining = line.substr(lastEnd);
                 ImU32 color = ImGui::ColorConvertFloat4ToU32(palette[static_cast<int>(TokenType::Default)]);
@@ -3661,10 +3295,8 @@ void CustomTextEditor::renderText(ImDrawList* drawList, const ImVec2& origin, in
 }
 
 void CustomTextEditor::renderCursors(ImDrawList* drawList, const ImVec2& origin) {
-    // Only show cursor when window is focused
     if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) return;
 
-    // Blink cursor
     float time = ImGui::GetTime();
     bool showCursor = isDraggingText || (fmod(time, 1.0f) < 0.5f);
 
@@ -3716,14 +3348,12 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
     // Position popup directly under the current word being typed
     TextPosition pos = autoCompleteAnchor;
     ImVec2 screenPos = textToScreen(pos, origin);
-    // Offset by 1 pixel to be directly under the text baseline
     screenPos.y += lineHeight + 1.0f;
 
-    // Popup dimensions - use GetTextLineHeight for exact line height without spacing
     float popupWidth = 350.0f;
-    float itemHeight = ImGui::GetTextLineHeight() + 4.0f; // Add small padding
+    float itemHeight = ImGui::GetTextLineHeight() + 4.0f;
     float maxVisibleItems = 10.0f;
-    float popupMaxHeight = itemHeight * maxVisibleItems + 8.0f; // 8 for padding
+    float popupMaxHeight = itemHeight * maxVisibleItems + 8.0f;
     float popupActualHeight = std::min(popupMaxHeight, itemHeight * currentSuggestions.size() + 8.0f);
 
     // Ensure popup doesn't go off-screen
@@ -3775,7 +3405,6 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
 
             ImGui::PushID(i);
 
-            // Calculate row bounds for custom rendering
             ImVec2 cursorPos = ImGui::GetCursorScreenPos();
             float availWidth = ImGui::GetContentRegionAvail().x;
 
@@ -3784,7 +3413,6 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
             ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.17f, 0.27f, 0.44f, 1.0f));
             ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.016f, 0.224f, 0.369f, 1.0f));
 
-            // Render selectable with exact item height
             if (ImGui::Selectable("##item", selected, ImGuiSelectableFlags_None, ImVec2(availWidth, itemHeight))) {
                 clickedIndex = i;
             }
@@ -3796,20 +3424,17 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
                 ImGui::SetScrollHereY();
             }
 
-            // Save cursor position for next item (after selectable advances it)
             ImVec2 nextItemPos = ImGui::GetCursorPos();
 
             // Draw content on top of selectable - center vertically
             float textY = cursorPos.y + (itemHeight - ImGui::GetTextLineHeight()) * 0.5f;
             ImGui::SetCursorScreenPos(ImVec2(cursorPos.x + 4.0f, textY));
 
-            // Icon with color
             ImVec4 iconColor = SemanticSuggestions::GetKindColor(item.kind);
             const char* icon = SemanticSuggestions::GetKindIcon(item.kind);
             ImGui::TextColored(iconColor, "%s", icon);
             ImGui::SameLine();
 
-            // Label
             ImGui::TextUnformatted(item.label.c_str());
 
             // Detail (right-aligned, dimmed)
@@ -3827,12 +3452,10 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
                 }
             }
 
-            // Restore cursor position for next item
             ImGui::SetCursorPos(nextItemPos);
 
             ImGui::PopID();
 
-            // Show documentation tooltip on hover
             if (ImGui::IsItemHovered() && !item.documentation.empty()) {
                 ImGui::SetTooltip("%s", item.documentation.c_str());
             }
@@ -3843,7 +3466,6 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
             applySuggestion();
         }
 
-        // Reset scroll flag after rendering
         scrollToSuggestion = false;
     }
     ImGui::End();
@@ -3855,18 +3477,6 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
 void CustomTextEditor::renderAutoComplete(const ImVec2& origin) {
     renderSuggestions(origin);
     renderParamHint(origin);
-}
-
-void CustomTextEditor::renderTooltip() {
-    if (!showTooltipFlag || tooltipText.empty()) return;
-
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - tooltipStartTime).count();
-
-    if (elapsed < 500) return; // Delay before showing tooltip
-
-    ImGui::SetNextWindowPos(tooltipPos);
-    ImGui::SetTooltip("%s", tooltipText.c_str());
 }
 
 void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& editorSize) {
@@ -3889,7 +3499,6 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
 
     if (ImGui::Begin("##FindDialog", nullptr, flags)) {
 
-        // Input field with search input utility - use a fixed width group
         const float inputWidth = Theme::dpi(180.0f);
         const float controlHeight = ImGui::GetFrameHeight();
 
@@ -3916,7 +3525,6 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
         ImGui::SetCursorPosY(currentY); // Restore Y position
         ImGui::SameLine();
 
-        // Track if we need to refocus after find
         if (findRefocusInput) {
             ImGui::SetKeyboardFocusHere();
             findRefocusInput = false;
@@ -3924,19 +3532,16 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
             ImGui::SetKeyboardFocusHere();
         }
 
-        // Wrap in a group with fixed width for the search input
         float findInputStartX = ImGui::GetCursorPosX();
         ImGui::BeginGroup();
 
         // Use UIUtils::searchInput for consistent look with Output window
         if (UIUtils::searchInput("##FindInput", "Find...", findInputBuffer, sizeof(findInputBuffer), false, &findCaseSensitive, inputWidth)) {
-            // Text changed, update search
             if (strcmp(searchText.c_str(), findInputBuffer) != 0) {
                 SetSearchText(findInputBuffer);
             }
         }
 
-        // Check for Enter key while the window is focused
         bool enterPressed = ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_Enter);
         bool shiftEnterPressed = ImGui::IsWindowFocused() && ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_Enter);
 
@@ -3948,18 +3553,16 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
             findLastCaseSensitive = findCaseSensitive;
         }
 
-        // Handle Enter key for find next/previous
         if (shiftEnterPressed) {
-            FindPrevious(findCaseSensitive, findWholeWord);
+            FindPrevious();
             findRefocusInput = true;
         } else if (enterPressed) {
-            FindNext(findCaseSensitive, findWholeWord);
+            FindNext();
             findRefocusInput = true;
         }
 
         ImGui::SameLine();
 
-        // Results count with fixed width
         char countBuf[32];
         if (!searchResults.empty()) {
             int current = currentSearchResult >= 0 ? currentSearchResult + 1 : 0;
@@ -3988,23 +3591,20 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
 
         ImGui::SameLine();
 
-        // Previous button
         if (ImGui::Button(ICON_FA_CHEVRON_UP "##Prev") || (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_UpArrow))) {
-            FindPrevious(findCaseSensitive, findWholeWord);
+            FindPrevious();
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Previous (Shift+Enter)");
 
         ImGui::SameLine();
 
-        // Next button
         if (ImGui::Button(ICON_FA_CHEVRON_DOWN "##Next") || (ImGui::IsWindowFocused() && ImGui::IsKeyPressed(ImGuiKey_DownArrow))) {
-            FindNext(findCaseSensitive, findWholeWord);
+            FindNext();
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Next (Enter)");
 
         ImGui::SameLine(0.0f, 15.0f);
 
-        // Close button
         if (ImGui::Button(ICON_FA_XMARK "##Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             CloseFind();
         }
@@ -4024,7 +3624,7 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
             ImGui::SameLine();
 
             if (ImGui::Button("Replace") || (replaceEnter && !replaceShiftEnter)) {
-                ReplaceNext(findCaseSensitive, findWholeWord);
+                ReplaceNext();
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Replace Next (Enter)");
 
@@ -4121,8 +3721,7 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_NoMove;
 
-    // Prevent ImGui from handling navigation (scrolling with arrows etc) for this window
-    // This fixes the issue where pressing Up/Down in the suggestions popup would also scroll the editor
+    // Without this, Up/Down in the suggestions popup would also scroll the editor
     flags |= ImGuiWindowFlags_NoNavInputs;
 
     ImVec2 contentSize = size;
@@ -4131,9 +3730,8 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
 
     ImGui::PushID(this);
     if (ImGui::BeginChild(title, contentSize, border ? ImGuiChildFlags_Borders : ImGuiChildFlags_None, flags)) {
-        // Auto-focus editor child when parent window is focused but child is not
-        // (e.g., user clicked the window tab/title bar)
-        // Skip while a popup is open: stealing focus would close it (e.g. the settings popup)
+        // Focus the child when only the parent is focused (a click on the tab or title bar).
+        // A popup is skipped because stealing focus would close it.
         if (!ImGui::IsWindowFocused() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
             !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
             ImGui::SetWindowFocus();
@@ -4143,7 +3741,6 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
             ImGui::SetWindowFocus();
             pendingFocus = false;
         }
-        // Calculate metrics first
         ImFont* font = ImGui::GetFont();
         float fontSize = ImGui::GetFontSize();
         charWidth = font->CalcTextSizeA(fontSize, FLT_MAX, -1.0f, "X").x;
@@ -4163,7 +3760,6 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
 
         textStartX = lineNumberWidth + leftMargin;
 
-        // Define content size for proper scrolling
         float maxLineWidth = 0.0f;
         for (const auto& line : lines) {
             float lineWidth = line.size() * charWidth;
@@ -4172,19 +3768,17 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
         float totalWidth = textStartX + maxLineWidth + 50.0f;
         float totalHeight = lines.size() * lineHeight + lineHeight;
 
-        // Create a dummy to set content size for scrolling
+        // The dummy gives the child its scrollable content size
         ImVec2 cursorBackup = ImGui::GetCursorPos();
         ImGui::SetCursorPos(ImVec2(0, 0));
         ImGui::Dummy(ImVec2(totalWidth, totalHeight));
         ImGui::SetCursorPos(cursorBackup);
 
-        // Use ImGui's scroll position (but don't update if suggestions popup is hovered)
-        // Also restore scroll position if popup is hovered to prevent drift
+        // A hovered suggestions popup keeps its own scroll, restoring ours stops the drift
         if (!suggestionsHovered) {
             scrollY = ImGui::GetScrollY();
             scrollX = ImGui::GetScrollX();
         } else {
-            // Restore scroll position to prevent parent window from scrolling
             ImGui::SetScrollY(scrollY);
             ImGui::SetScrollX(scrollX);
         }
@@ -4197,7 +3791,6 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
         renderAutoComplete(origin);
         ImGui::PopFont();
 
-        // Handle pending scroll (from Find dialog)
         if (pendingScrollToCursor) {
             scrollToCursor();
             pendingScrollToCursor = false;
@@ -4226,19 +3819,15 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
             float right = wPos.x + wSize.x;
             float bottom = wPos.y + wSize.y;
 
-            // Check if mouse is in vertical scrollbar area (right edge)
             bool overVScrollbar = (mPos.x >= right - scrollbarSize && mPos.x <= right);
-            // Check if mouse is in horizontal scrollbar area (bottom edge)
             bool overHScrollbar = (mPos.y >= bottom - scrollbarSize && mPos.y <= bottom);
 
             ImGui::SetMouseCursor((overVScrollbar || overHScrollbar) ? ImGuiMouseCursor_Arrow : ImGuiMouseCursor_TextInput);
         }
 
-        // Calculate visible lines
         int startLine = static_cast<int>(scrollY / lineHeight);
         int endLine = startLine + static_cast<int>(contentSize.y / lineHeight) + 2;
 
-        // Render current line highlight
         if (highlightCurrentLine && !cursors.empty()) {
             ImU32 lineColor = ImGui::ColorConvertFloat4ToU32(currentLineColor);
             float y = origin.y + cursors[primaryCursor].position.line * lineHeight;
@@ -4249,7 +3838,6 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
             );
         }
 
-        // Render components
         renderSearchHighlights(drawList, origin, startLine, endLine);
         renderSelections(drawList, origin, startLine, endLine);
         renderMatchingBrackets(drawList, origin);
@@ -4257,7 +3845,6 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
         renderText(drawList, origin, startLine, endLine);
         renderCursors(drawList, origin);
 
-        // Render Find Dialog
         ImGui::PushFont(ImGui::GetIO().FontDefault);
         renderFindDialog(ImGui::GetWindowPos(), contentSize);
         ImGui::PopFont();
@@ -4272,8 +3859,6 @@ void CustomTextEditor::Render(const char* title, const ImVec2& size, bool border
     ImGui::PushFont(ImGui::GetIO().FontDefault);
     renderContextMenu();
     ImGui::PopFont();
-
-    renderTooltip();
 }
 
 } // namespace doriax::editor
