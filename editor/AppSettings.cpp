@@ -65,6 +65,7 @@ int AppSettings::resourcesItemViewStyle = 1;
 float AppSettings::resourcesLeftPanelWidth = 200.0f;
 float AppSettings::codeEditorFontSize = AppSettings::defaultCodeEditorFontSize;
 bool AppSettings::multiViewportEnabled = false;
+bool AppSettings::editorVSyncEnabled = true;
 PanelVisibilitySettings AppSettings::panelVisibility;
 ai::Settings AppSettings::aiSettings;
 
@@ -207,6 +208,9 @@ bool AppSettings::loadSettings() {
             if (editorNode["multi_viewport"]) {
                 multiViewportEnabled = editorNode["multi_viewport"].as<bool>();
             }
+            if (editorNode["vsync"]) {
+                editorVSyncEnabled = editorNode["vsync"].as<bool>();
+            }
             if (editorNode["panels"]) {
                 auto panelsNode = editorNode["panels"];
                 if (panelsNode["structure"]) panelVisibility.structure = panelsNode["structure"].as<bool>();
@@ -317,6 +321,7 @@ bool AppSettings::saveSettings() {
         // Editor viewport settings
         YAML::Node editorNode;
         editorNode["multi_viewport"] = multiViewportEnabled;
+        editorNode["vsync"] = editorVSyncEnabled;
         YAML::Node panelsNode;
         panelsNode["structure"] = panelVisibility.structure;
         panelsNode["properties"] = panelVisibility.properties;
@@ -524,6 +529,14 @@ bool AppSettings::getMultiViewportEnabled() {
 
 void AppSettings::setMultiViewportEnabled(bool enabled) {
     multiViewportEnabled = enabled;
+}
+
+bool AppSettings::getEditorVSyncEnabled() {
+    return editorVSyncEnabled;
+}
+
+void AppSettings::setEditorVSyncEnabled(bool enabled) {
+    editorVSyncEnabled = enabled;
 }
 
 PanelVisibilitySettings AppSettings::getPanelVisibility() {

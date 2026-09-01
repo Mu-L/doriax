@@ -3,6 +3,7 @@
 
 #include "EditorFrame.h"
 
+#include "AppSettings.h"
 #include "Backend.h"
 
 #include "imgui.h"
@@ -82,8 +83,10 @@ bool EditorFrame::run(EditorFrameState& state){
 
     // Unfocused always drops synchronization, so a blocked present can never
     // stall the event loop that serves clipboard requests.
-    const bool frameSync = state.focused &&
-        (!playSessionActive || project->isVSyncEnabled());
+    const bool vsync = playSessionActive
+        ? project->isVSyncEnabled()
+        : AppSettings::getEditorVSyncEnabled();
+    const bool frameSync = state.focused && vsync;
     if (!state.minimized && !renderer->updateTarget(state.width, state.height, frameSync)){
         return false;
     }

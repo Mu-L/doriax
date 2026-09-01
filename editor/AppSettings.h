@@ -80,6 +80,7 @@ private:
 
     // Editor viewport settings
     static bool multiViewportEnabled;
+    static bool editorVSyncEnabled;
     static PanelVisibilitySettings panelVisibility;
 
     // AI assistant settings (API keys are intentionally not stored here)
@@ -153,6 +154,10 @@ public:
     // Multi-viewport: allow dockable windows to be dragged out into their own OS window
     static bool getMultiViewportEnabled();
     static void setMultiViewportEnabled(bool enabled);
+
+    // VSync for the editor's own frames; Play mode and builds use the project setting
+    static bool getEditorVSyncEnabled();
+    static void setEditorVSyncEnabled(bool enabled);
 
     // Panels toggled from the View menu
     static PanelVisibilitySettings getPanelVisibility();

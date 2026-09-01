@@ -83,6 +83,16 @@ static void beginSettingsRow(const char* label, const char* tooltip = nullptr) {
     ImGui::TableNextColumn();
 }
 
+static void helpMarker(const char* desc) {
+    ImGui::TextDisabled("(?)");
+    if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+        ImGui::TextUnformatted(desc);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
 static void drawCombo(const char* id, const char* const* names, int count, int& selectedIndex) {
     if (selectedIndex < 0 || selectedIndex >= count) selectedIndex = 0;
 
@@ -665,8 +675,12 @@ void ProjectSettingsWindow::drawWindowSettings() {
             }
         }
 
-        beginSettingsRow("VSync", "Synchronize Play mode and supported desktop builds to the display refresh rate. macOS Metal exports remain synchronized.");
+        beginSettingsRow("VSync");
         ImGui::Checkbox("##VSync", &m_vsyncEnabled);
+        ImGui::SameLine();
+        helpMarker("Synchronize Play mode and supported desktop builds to the display refresh rate. "
+            "The editor window follows View > Editor VSync. "
+            "macOS Metal exports remain synchronized.");
     });
 }
 

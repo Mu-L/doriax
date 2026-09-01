@@ -1,6 +1,7 @@
 // (c) Eduardo Doria
 // SPDX-License-Identifier: MIT
 
+#include "AppSettings.h"
 #include "Backend.h"
 #include "EditorHost.h"
 
@@ -947,8 +948,9 @@ int editor::Backend::init(int argc, char* argv[]) {
                 const bool focused = NSApp.active;
                 const bool playSessionActive =
                     activeProject->isPlaySessionActive();
-                const bool frameSync = !playSessionActive ||
-                    activeProject->isVSyncEnabled();
+                const bool frameSync = playSessionActive
+                    ? activeProject->isVSyncEnabled()
+                    : AppSettings::getEditorVSyncEnabled();
                 setMouseControlSuspended(playSessionActive &&
                     !activeProject->isMainScenePlaying());
 
