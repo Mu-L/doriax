@@ -12,7 +12,8 @@ namespace doriax::editor::ai {
 
 namespace {
 
-constexpr size_t kMaxModels = 60;
+// Upper bound for the picker; gateways list hundreds.
+constexpr size_t kMaxModels = 100;
 constexpr int64_t kRecentOpenAiModelWindowSeconds = 60LL * 60LL * 24LL * 365LL * 2LL;
 
 std::string lower(std::string value) {
@@ -27,6 +28,11 @@ bool startsWithAny(const std::string& value, std::initializer_list<const char*> 
         if (value.rfind(prefix, 0) == 0) return true;
     }
     return false;
+}
+
+bool endsWith(const std::string& value, const std::string& suffix) {
+    return value.size() >= suffix.size() &&
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 bool containsAny(const std::string& value, std::initializer_list<const char*> needles) {
@@ -102,6 +108,17 @@ bool looksLikeMainOpenAiChatModel(const std::string& id, int64_t created, int64_
     return true;
 }
 
+bool isOpenCodeZen(const std::string& url) {
+    return lower(url).find("opencode.ai") != std::string::npos;
+}
+
+// Zen routes each vendor family to /chat/completions, /responses, /messages or a
+// Gemini path, and /models lists all of them without saying which.
+bool servedByChatCompletions(const std::string& id) {
+    const std::string token = lower(id);
+    return !startsWithAny(token, {"claude-", "gpt-", "grok-", "gemini-", "qwen", "muse-spark"});
+}
+
 bool looksLikeMainGeminiModel(const std::string& id) {
     const std::string token = lower(id);
     if (!startsWithAny(token, {"gemini-"})) return false;
@@ -143,9 +160,9 @@ ModelCatalog::~ModelCatalog() {
     }
 }
 
-std::vector<ModelInfo> ModelCatalog::models(ProviderId provider) const {
+std::vector<ModelInfo> ModelCatalog::models(const std::string& account) const {
     std::lock_guard<std::mutex> lock(mutex);
-    auto it = cache.find(provider);
+    auto it = cache.find(account);
     if (it != cache.end() && it->second.status == CatalogStatus::Loaded && !it->second.models.empty()) {
         return it->second.models;
     }
@@ -153,24 +170,38 @@ std::vector<ModelInfo> ModelCatalog::models(ProviderId provider) const {
     return {};
 }
 
-CatalogStatus ModelCatalog::status(ProviderId provider) const {
+CatalogStatus ModelCatalog::status(const std::string& account) const {
     std::lock_guard<std::mutex> lock(mutex);
-    auto it = cache.find(provider);
+    auto it = cache.find(account);
     return it == cache.end() ? CatalogStatus::Idle : it->second.status;
 }
 
-void ModelCatalog::refresh(ProviderId provider, const std::string& apiKey, const std::string& endpoint) {
-    if (apiKey.empty()) {
+bool ModelCatalog::needsFetch(const ProviderAccount& account) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = cache.find(account.id);
+    if (it == cache.end() || it->second.status == CatalogStatus::Idle) {
+        return true;
+    }
+    if (it->second.status == CatalogStatus::Loading) {
+        return false;
+    }
+    // A failed fetch is not retried on its own; a new URL is.
+    return it->second.url != account.url;
+}
+
+void ModelCatalog::refresh(const ProviderAccount& account, const std::string& apiKey) {
+    if (account.id.empty() ||
+        (apiKey.empty() && accountRequiresApiKey(account.provider))) {
         return;
     }
     {
         std::lock_guard<std::mutex> lock(mutex);
-        Entry& entry = cache[provider];
+        Entry& entry = cache[account.id];
         if (entry.status == CatalogStatus::Loading) {
             return; // already in flight
         }
         entry.status = CatalogStatus::Loading;
-        queue.push_back({provider, apiKey, endpoint});
+        queue.push_back({account.provider, account.id, account.url, apiKey});
     }
     condition.notify_one();
 }
@@ -192,7 +223,8 @@ void ModelCatalog::workerLoop() {
         bool ok = fetchModels(request, fetched);
 
         std::lock_guard<std::mutex> lock(mutex);
-        Entry& entry = cache[request.provider];
+        Entry& entry = cache[request.account];
+        entry.url = request.url; // on failure too, so a broken URL is not retried every frame
         if (ok && !fetched.empty()) {
             entry.models = std::move(fetched);
             entry.status = CatalogStatus::Loaded;
@@ -225,12 +257,13 @@ bool ModelCatalog::fetchModels(const Request& request, std::vector<ModelInfo>& o
             headers.push_back("Authorization: Bearer " + request.apiKey);
             break;
         case ProviderId::OpenAICompatible: {
-            std::string base = request.endpoint.empty()
-                ? "https://openrouter.ai/api/v1/chat/completions"
-                : request.endpoint;
-            size_t pos = base.find("/chat/completions");
-            url = (pos != std::string::npos) ? base.substr(0, pos) + "/models" : base;
-            headers.push_back("Authorization: Bearer " + request.apiKey);
+            if (request.url.empty()) return false;
+            size_t pos = request.url.find("/chat/completions");
+            url = (pos != std::string::npos) ? request.url.substr(0, pos) + "/models"
+                                             : request.url;
+            if (!request.apiKey.empty()) {
+                headers.push_back("Authorization: Bearer " + request.apiKey);
+            }
             break;
         }
     }
@@ -308,6 +341,30 @@ bool ModelCatalog::fetchModels(const Request& request, std::vector<ModelInfo>& o
             }
             out.push_back({model.id, model.label});
             if (out.size() >= kMaxModels) break;
+        }
+        return !out.empty();
+    }
+
+    if (isOpenCodeZen(request.url)) {
+        // Free models lead the list. Zen suffixes them "-free" and exposes no
+        // cost field, so the one that skips the convention is named here.
+        static const std::set<std::string> freeWithoutSuffix = {"big-pickle"};
+        std::vector<ModelInfo> freeModels;
+        std::vector<ModelInfo> paidModels;
+        for (const Json& model : root["data"]) {
+            std::string id = model.value("id", "");
+            if (id.empty() || !servedByChatCompletions(id)) continue;
+            std::string label = model.value("display_name", model.value("name", std::string()));
+            if (label.empty()) label = humanizeModelId(id);
+            const std::string token = lower(id);
+            const bool isFree = endsWith(token, "-free") || freeWithoutSuffix.count(token) > 0;
+            (isFree ? freeModels : paidModels).push_back({id, label});
+        }
+        for (std::vector<ModelInfo>* group : {&freeModels, &paidModels}) {
+            for (ModelInfo& model : *group) {
+                if (out.size() >= kMaxModels) break;
+                out.push_back(std::move(model));
+            }
         }
         return !out.empty();
     }

@@ -669,17 +669,6 @@ int promptWrapCallback(ImGuiInputTextCallbackData* data) {
     return 0;
 }
 
-const char* providerDisplayName(ai::ProviderId provider) {
-    switch (provider) {
-        case ai::ProviderId::OpenAI: return "OpenAI";
-        case ai::ProviderId::Anthropic: return "Anthropic";
-        case ai::ProviderId::Gemini: return "Gemini";
-        case ai::ProviderId::DeepSeek: return "DeepSeek";
-        case ai::ProviderId::OpenAICompatible: return "OpenAI-compatible";
-    }
-    return "OpenAI";
-}
-
 const char* kApprovalLabels[] = {"Preview then approve", "Auto-run read-only", "Full agent"};
 const ai::ApprovalMode kApprovalValues[] = {
     ai::ApprovalMode::PreviewThenApprove,
@@ -700,18 +689,21 @@ const char* approvalDisplayName(ai::ApprovalMode mode) {
 }
 
 std::string modelDisplayName(const ai::Settings& settings, const ai::ModelCatalog& catalog) {
-    std::vector<ai::ProviderId> providers = ai::SecretStore::providersWithKeys();
-    if (providers.empty()) {
+    const std::string account = ai::accountKey(settings);
+    if (ai::SecretStore::configuredAccounts(settings).empty()) {
         return "No model";
     }
-    if (!ai::SecretStore::hasApiKey(settings.provider)) {
+    if (ai::accountRequiresApiKey(settings.provider) && !ai::SecretStore::hasApiKey(account)) {
         return "Select model";
     }
 
     std::string current = settings.model.empty()
         ? ai::defaultModelForProvider(settings.provider)
         : settings.model;
-    for (const auto& model : catalog.models(settings.provider)) {
+    if (current.empty()) {
+        return "Select model";
+    }
+    for (const auto& model : catalog.models(account)) {
         if (current == model.id) {
             return model.label;
         }
@@ -940,11 +932,11 @@ void AiChatWindow::shutdown() {
 }
 
 void AiChatWindow::prefetchModels() {
-    // Kick off a background /models fetch for every configured provider at
-    // app open, so the picker is already populated by the time it is opened.
+    // Kick off a background /models fetch for every configured account at app
+    // open, so the picker is already populated by the time it is opened.
     const ai::Settings settings = AppSettings::getAiSettings();
-    for (ai::ProviderId provider : ai::SecretStore::providersWithKeys()) {
-        modelCatalog.refresh(provider, ai::SecretStore::getApiKey(provider), settings.customEndpoint);
+    for (const ai::ProviderAccount& account : ai::SecretStore::configuredAccounts(settings)) {
+        modelCatalog.refresh(account, ai::SecretStore::getApiKey(account.id));
     }
 }
 
@@ -1218,7 +1210,7 @@ void AiChatWindow::drawTranscript(float height) {
         ImGui::TextDisabled("Ask about your project, scene, or resources,");
         ImGui::TextDisabled("or request an editor action such as");
         ImGui::TextDisabled("\"add a point light above the player\".");
-        if (ai::SecretStore::providersWithKeys().empty()) {
+        if (ai::SecretStore::configuredAccounts(service.getSettings()).empty()) {
             ImGui::Spacing();
             if (ImGui::Button(ICON_FA_KEY " Set API key")) {
                 settingsWindow.open(&service);
@@ -2521,9 +2513,9 @@ void AiChatWindow::drawModelPopup() {
     }
 
     ai::Settings settings = service.getSettings();
-    std::vector<ai::ProviderId> providers = ai::SecretStore::providersWithKeys();
+    std::vector<ai::ProviderAccount> accounts = ai::SecretStore::configuredAccounts(settings);
 
-    if (providers.empty()) {
+    if (accounts.empty()) {
         ImGui::TextDisabled("No providers configured");
         if (ImGui::Selectable("Add an API key...")) {
             settingsWindow.open(&service);
@@ -2537,28 +2529,32 @@ void AiChatWindow::drawModelPopup() {
     std::string current = settings.model.empty()
         ? ai::defaultModelForProvider(settings.provider)
         : settings.model;
+    const std::string currentAccount = ai::accountKey(settings);
 
-    // Only providers with a configured key are listed; their models are fetched
-    // live from the provider (nothing is shown until the fetch lands).
-    for (size_t pi = 0; pi < providers.size(); ++pi) {
-        ai::ProviderId provider = providers[pi];
-        if (modelCatalog.status(provider) == ai::CatalogStatus::Idle) {
-            modelCatalog.refresh(provider, ai::SecretStore::getApiKey(provider), settings.customEndpoint);
+    // Only configured accounts are listed; their models are fetched live
+    // (nothing is shown until the fetch lands).
+    for (size_t index = 0; index < accounts.size(); ++index) {
+        const ai::ProviderAccount& account = accounts[index];
+        if (modelCatalog.needsFetch(account)) {
+            modelCatalog.refresh(account, ai::SecretStore::getApiKey(account.id));
         }
 
-        if (pi > 0) {
+        if (index > 0) {
             ImGui::Spacing();
         }
-        ImGui::TextDisabled("%s", providerDisplayName(provider));
+        // Two endpoints can serve the same model id, so scope the ids per account.
+        ImGui::PushID(account.id.c_str());
+        ImGui::TextDisabled("%s", account.label.c_str());
         ImGui::Separator();
 
-        std::vector<ai::ModelInfo> models = modelCatalog.models(provider);
+        std::vector<ai::ModelInfo> models = modelCatalog.models(account.id);
         for (const auto& model : models) {
-            bool selected = (provider == settings.provider) && (current == model.id);
+            bool selected = (account.id == currentAccount) && (current == model.id);
             ImGui::PushID(model.id.c_str());
             if (ImGui::Selectable(model.label.c_str(), selected)) {
                 ai::Settings next = settings;
-                next.provider = provider;
+                next.provider = account.provider;
+                next.endpointId = account.endpointId;
                 next.model = model.id;
                 applySettings(next);
                 ImGui::CloseCurrentPopup();
@@ -2569,24 +2565,28 @@ void AiChatWindow::drawModelPopup() {
             ImGui::PopID();
         }
         if (models.empty()) {
-            ImGui::TextDisabled("  %s", modelCatalog.status(provider) == ai::CatalogStatus::Loading
+            ImGui::TextDisabled("  %s", modelCatalog.status(account.id) == ai::CatalogStatus::Loading
                                             ? "Loading..."
                                             : "No models available");
         }
+        // Per account: an endpoint whose /models failed is only reachable here.
+        if (ImGui::Selectable("Custom model...")) {
+            std::snprintf(customModelBuffer.data(), customModelBuffer.size(), "%s",
+                          account.id == currentAccount ? current.c_str() : "");
+            customModelProvider = account.provider;
+            customModelEndpointId = account.endpointId;
+            customModelPopupRequested = true;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::PopID();
     }
 
     ImGui::Spacing();
     ImGui::Separator();
     if (ImGui::Selectable(ICON_FA_ROTATE "  Refresh models")) {
-        for (ai::ProviderId provider : providers) {
-            modelCatalog.refresh(provider, ai::SecretStore::getApiKey(provider), settings.customEndpoint);
+        for (const ai::ProviderAccount& account : accounts) {
+            modelCatalog.refresh(account, ai::SecretStore::getApiKey(account.id));
         }
-    }
-
-    if (ImGui::Selectable("Custom model...")) {
-        std::snprintf(customModelBuffer.data(), customModelBuffer.size(), "%s", current.c_str());
-        customModelPopupRequested = true;
-        ImGui::CloseCurrentPopup();
     }
 
     keepCurrentWindowInsideViewport();
@@ -2610,6 +2610,8 @@ void AiChatWindow::drawCustomModelPopup() {
     ImGui::BeginDisabled(customModelBuffer[0] == '\0');
     if (ImGui::Button("Use", ImVec2(90, 0))) {
         ai::Settings next = service.getSettings();
+        next.provider = customModelProvider;
+        next.endpointId = customModelEndpointId;
         next.model = customModelBuffer.data();
         applySettings(next);
         ImGui::CloseCurrentPopup();
@@ -2655,12 +2657,18 @@ void AiChatWindow::applySettings(const ai::Settings& settings) {
 
 bool AiChatWindow::canSendMessage(std::string* reason) const {
     ai::Settings settings = service.getSettings();
-    if (ai::SecretStore::providersWithKeys().empty()) {
+    if (ai::SecretStore::configuredAccounts(settings).empty()) {
         if (reason) *reason = "Add an API key before sending.";
         return false;
     }
-    if (!ai::SecretStore::hasApiKey(settings.provider)) {
+    if (ai::accountRequiresApiKey(settings.provider) &&
+        !ai::SecretStore::hasApiKey(ai::accountKey(settings))) {
         if (reason) *reason = "Select a configured model/provider before sending.";
+        return false;
+    }
+    if (settings.provider == ai::ProviderId::OpenAICompatible &&
+        ai::activeEndpointUrl(settings).empty()) {
+        if (reason) *reason = "Set this endpoint's URL in AI settings before sending.";
         return false;
     }
     if (settings.model.empty()) {

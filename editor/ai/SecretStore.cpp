@@ -18,7 +18,7 @@ namespace doriax::editor::ai {
 namespace {
 
 std::mutex g_mutex;
-std::map<ProviderId, std::string> g_keys;
+std::map<std::string, std::string> g_keys;
 bool g_loaded = false;
 
 fs::path keyFilePath() {
@@ -111,8 +111,8 @@ void loadLocked() {
         std::string obfuscated;
         if (!fromHex(hex, obfuscated)) continue;
         std::string key = obfuscate(obfuscated);
-        if (!key.empty()) {
-            g_keys[providerFromString(name)] = key;
+        if (!key.empty() && !name.empty()) {
+            g_keys[name] = key;
         }
     }
 }
@@ -130,51 +130,60 @@ void saveLocked() {
     out << "# Doriax AI API keys - obfuscated and machine-bound. Do not edit or share.\n";
     for (const auto& entry : g_keys) {
         if (entry.second.empty()) continue;
-        out << toString(entry.first) << " = " << toHex(obfuscate(entry.second)) << "\n";
+        out << entry.first << " = " << toHex(obfuscate(entry.second)) << "\n";
     }
 }
 
 } // namespace
 
-void SecretStore::setApiKey(ProviderId provider, const std::string& key) {
+void SecretStore::setApiKey(const std::string& account, const std::string& key) {
+    if (account.empty()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     loadLocked();
     if (key.empty()) {
-        g_keys.erase(provider);
+        g_keys.erase(account);
     } else {
-        g_keys[provider] = key;
+        g_keys[account] = key;
     }
     saveLocked();
 }
 
-std::string SecretStore::getApiKey(ProviderId provider) {
+std::string SecretStore::getApiKey(const std::string& account) {
     std::lock_guard<std::mutex> lock(g_mutex);
     loadLocked();
-    auto it = g_keys.find(provider);
+    auto it = g_keys.find(account);
     return it == g_keys.end() ? std::string() : it->second;
 }
 
-bool SecretStore::hasApiKey(ProviderId provider) {
-    return !getApiKey(provider).empty();
+bool SecretStore::hasApiKey(const std::string& account) {
+    return !getApiKey(account).empty();
 }
 
-void SecretStore::clearApiKey(ProviderId provider) {
+void SecretStore::clearApiKey(const std::string& account) {
     std::lock_guard<std::mutex> lock(g_mutex);
     loadLocked();
-    g_keys.erase(provider);
+    g_keys.erase(account);
     saveLocked();
 }
 
-std::vector<ProviderId> SecretStore::providersWithKeys() {
+void SecretStore::renameAccount(const std::string& from, const std::string& to) {
+    if (from == to || from.empty() || to.empty()) return;
     std::lock_guard<std::mutex> lock(g_mutex);
     loadLocked();
-    std::vector<ProviderId> result;
-    for (ProviderId provider : {ProviderId::OpenAI, ProviderId::Anthropic,
-                                ProviderId::Gemini, ProviderId::DeepSeek,
-                                ProviderId::OpenAICompatible}) {
-        auto it = g_keys.find(provider);
-        if (it != g_keys.end() && !it->second.empty()) {
-            result.push_back(provider);
+    auto it = g_keys.find(from);
+    if (it == g_keys.end() || g_keys.count(to)) return;
+    g_keys[to] = it->second;
+    g_keys.erase(it);
+    saveLocked();
+}
+
+std::vector<ProviderAccount> SecretStore::configuredAccounts(const Settings& settings) {
+    std::vector<ProviderAccount> result;
+    for (ProviderAccount& account : listAccounts(settings)) {
+        const bool ready = accountRequiresApiKey(account.provider)
+            ? hasApiKey(account.id) : !account.url.empty();
+        if (ready) {
+            result.push_back(std::move(account));
         }
     }
     return result;

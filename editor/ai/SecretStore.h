@@ -10,19 +10,25 @@
 
 namespace doriax::editor::ai {
 
-// Per-provider API key store. Keys are persisted to a 0600 file in the user
+// Per-account API key store. Keys are persisted to a 0600 file in the user
 // config directory, lightly obfuscated with a machine-derived keystream so they
 // are not written in plaintext. This protects against casual reads and is not as
-// strong as an OS keychain. Multiple providers can each hold their own key.
+// strong as an OS keychain. Accounts are the ids from ai::accountKey(), so every
+// provider and custom endpoint holds its own key.
 class SecretStore {
 public:
-    static void setApiKey(ProviderId provider, const std::string& key);
-    static std::string getApiKey(ProviderId provider);
-    static bool hasApiKey(ProviderId provider);
-    static void clearApiKey(ProviderId provider);
+    static void setApiKey(const std::string& account, const std::string& key);
+    static std::string getApiKey(const std::string& account);
+    static bool hasApiKey(const std::string& account);
+    static void clearApiKey(const std::string& account);
 
-    // Providers that currently have a non-empty key, in enum order.
-    static std::vector<ProviderId> providersWithKeys();
+    // Moves a key onto a new account id, so the legacy single custom-endpoint
+    // slot survives the upgrade to named endpoints. Never overwrites.
+    static void renameAccount(const std::string& from, const std::string& to);
+
+    // Accounts ready to use, in listAccounts() order: a built-in needs a stored
+    // key, a custom endpoint only needs a URL.
+    static std::vector<ProviderAccount> configuredAccounts(const Settings& settings);
 };
 
 } // namespace doriax::editor::ai

@@ -76,6 +76,9 @@ private:
     bool scrollToBottom = false;
     bool refocusInput = false;
     bool customModelPopupRequested = false;
+    // Account the custom-model popup applies to, captured when it opens.
+    ai::ProviderId customModelProvider = ai::ProviderId::OpenAI;
+    std::string customModelEndpointId;
     std::array<char, 8192> inputBuffer{};
     std::array<char, 256> customModelBuffer{};
     std::vector<int> inputSoftWraps;

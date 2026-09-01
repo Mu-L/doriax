@@ -3,6 +3,7 @@
 
 #include "AppSettings.h"
 #include "Out.h"
+#include "ai/SecretStore.h"
 #include <fstream>
 #include <algorithm>
 #include <cstdlib>
@@ -40,6 +41,34 @@ bool isWritableDirectory(const std::filesystem::path& dir) {
     }
     std::filesystem::remove(probe, ec);
     return true;
+}
+
+// Upgrades the single "custom_endpoint" URL to the named endpoint list. An empty
+// URL used to mean OpenRouter.
+void migrateLegacyEndpoint(ai::Settings& settings, const std::string& url) {
+    const std::string legacyAccount = ai::toString(ai::ProviderId::OpenAICompatible);
+    if (url.empty() && settings.provider != ai::ProviderId::OpenAICompatible &&
+        !ai::SecretStore::hasApiKey(legacyAccount)) {
+        return; // never configured; do not invent an entry
+    }
+
+    ai::CustomEndpoint endpoint;
+    endpoint.id = "custom";
+    endpoint.label = "Custom endpoint";
+    endpoint.url = url;
+    for (const ai::EndpointPreset& preset : ai::endpointPresets()) {
+        if (url.empty() ? preset.id == "openrouter" : preset.url == url) {
+            endpoint = {preset.id, preset.label, preset.url};
+            break;
+        }
+    }
+
+    settings.customEndpoints.push_back(endpoint);
+    if (settings.provider == ai::ProviderId::OpenAICompatible) {
+        settings.endpointId = endpoint.id;
+    }
+    ai::SecretStore::renameAccount(legacyAccount,
+                                   ai::accountKey(ai::ProviderId::OpenAICompatible, endpoint.id));
 }
 
 } // namespace
@@ -228,7 +257,23 @@ bool AppSettings::loadSettings() {
             auto aiNode = settingsData["ai_assistant"];
             if (aiNode["provider"]) aiSettings.provider = ai::providerFromString(aiNode["provider"].as<std::string>());
             if (aiNode["model"]) aiSettings.model = aiNode["model"].as<std::string>();
-            if (aiNode["custom_endpoint"]) aiSettings.customEndpoint = aiNode["custom_endpoint"].as<std::string>();
+            if (aiNode["endpoint_id"]) aiSettings.endpointId = aiNode["endpoint_id"].as<std::string>();
+            if (aiNode["custom_endpoints"] && aiNode["custom_endpoints"].IsSequence()) {
+                // Replace, not append: initialize() runs on the CLI and App paths.
+                aiSettings.customEndpoints.clear();
+                for (const auto& endpointNode : aiNode["custom_endpoints"]) {
+                    ai::CustomEndpoint endpoint;
+                    if (endpointNode["id"]) endpoint.id = endpointNode["id"].as<std::string>();
+                    if (endpointNode["label"]) endpoint.label = endpointNode["label"].as<std::string>();
+                    if (endpointNode["url"]) endpoint.url = endpointNode["url"].as<std::string>();
+                    // Duplicate ids would share one key and one model list.
+                    if (endpoint.id.empty() || ai::findEndpoint(aiSettings, endpoint.id)) continue;
+                    aiSettings.customEndpoints.push_back(endpoint);
+                }
+            }
+            if (aiNode["custom_endpoint"] && aiSettings.customEndpoints.empty()) {
+                migrateLegacyEndpoint(aiSettings, aiNode["custom_endpoint"].as<std::string>());
+            }
             if (aiNode["approval_mode"]) aiSettings.approvalMode = ai::approvalModeFromString(aiNode["approval_mode"].as<std::string>());
             if (aiNode["request_timeout_seconds"]) aiSettings.requestTimeoutSeconds = aiNode["request_timeout_seconds"].as<int>();
             if (aiNode["max_output_tokens"]) aiSettings.maxOutputTokens = aiNode["max_output_tokens"].as<int>();
@@ -337,7 +382,16 @@ bool AppSettings::saveSettings() {
         YAML::Node aiNode;
         aiNode["provider"] = ai::toString(aiSettings.provider);
         aiNode["model"] = aiSettings.model;
-        aiNode["custom_endpoint"] = aiSettings.customEndpoint;
+        aiNode["endpoint_id"] = aiSettings.endpointId;
+        YAML::Node endpointsNode(YAML::NodeType::Sequence);
+        for (const ai::CustomEndpoint& endpoint : aiSettings.customEndpoints) {
+            YAML::Node endpointNode;
+            endpointNode["id"] = endpoint.id;
+            endpointNode["label"] = endpoint.label;
+            endpointNode["url"] = endpoint.url;
+            endpointsNode.push_back(endpointNode);
+        }
+        aiNode["custom_endpoints"] = endpointsNode;
         aiNode["approval_mode"] = ai::toString(aiSettings.approvalMode);
         aiNode["request_timeout_seconds"] = aiSettings.requestTimeoutSeconds;
         aiNode["max_output_tokens"] = aiSettings.maxOutputTokens;

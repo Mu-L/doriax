@@ -24,22 +24,23 @@ struct ModelInfo {
 
 enum class CatalogStatus { Idle, Loading, Loaded, Error };
 
-// Fetches the list of models each provider exposes (OpenAI /v1/models,
-// Anthropic /v1/models, Gemini ListModels, DeepSeek /models,
-// OpenAI-compatible /models) on a background thread and caches the result.
-// Falls back to a curated list when nothing has been fetched yet or a request
-// fails.
+// Fetches the models each account exposes (OpenAI /v1/models, Anthropic
+// /v1/models, Gemini ListModels, DeepSeek /models, and the /models route derived
+// from a custom endpoint's URL) on a background thread, cached per account.
 class ModelCatalog {
 public:
     ModelCatalog();
     ~ModelCatalog();
 
-    // Cached models for a provider, or the curated fallback if not yet loaded.
-    std::vector<ModelInfo> models(ProviderId provider) const;
-    CatalogStatus status(ProviderId provider) const;
+    // Cached models for an account, empty until a fetch lands.
+    std::vector<ModelInfo> models(const std::string& account) const;
+    CatalogStatus status(const std::string& account) const;
+
+    // True when nothing is cached yet, or the endpoint was re-pointed at a new URL.
+    bool needsFetch(const ProviderAccount& account) const;
 
     // Queues a background fetch (forces a re-fetch even if already loaded).
-    void refresh(ProviderId provider, const std::string& apiKey, const std::string& endpoint);
+    void refresh(const ProviderAccount& account, const std::string& apiKey);
 
     // Builds a friendly label from a raw model id when a provider exposes no
     // display name (e.g. "deepseek-v4-flash" -> "Deepseek V4 Flash").
@@ -48,12 +49,14 @@ public:
 private:
     struct Request {
         ProviderId provider;
+        std::string account;
+        std::string url;
         std::string apiKey;
-        std::string endpoint;
     };
     struct Entry {
         CatalogStatus status = CatalogStatus::Idle;
         std::vector<ModelInfo> models;
+        std::string url; // what it was fetched from, so a re-pointed endpoint refetches
     };
 
     void workerLoop();
@@ -61,7 +64,7 @@ private:
 
     mutable std::mutex mutex;
     std::condition_variable condition;
-    std::map<ProviderId, Entry> cache;
+    std::map<std::string, Entry> cache;
     std::deque<Request> queue;
     std::thread worker;
     bool stop = false;

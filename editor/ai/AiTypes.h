@@ -22,6 +22,29 @@ enum class ProviderId {
     OpenAICompatible
 };
 
+// A user-named OpenAI-compatible endpoint (OpenCode Zen, OpenRouter, Ollama).
+struct CustomEndpoint {
+    std::string id; // stable slug; renaming the label keeps the stored key
+    std::string label;
+    std::string url;
+};
+
+// A built-in provider or one custom endpoint. The key store and model catalog
+// are keyed by id, so endpoints never share a key or a model list.
+struct ProviderAccount {
+    ProviderId provider = ProviderId::OpenAI;
+    std::string endpointId;
+    std::string label;
+    std::string id;
+    std::string url;
+};
+
+struct EndpointPreset {
+    std::string id;
+    std::string label;
+    std::string url;
+};
+
 enum class ChatRole {
     System,
     User,
@@ -38,7 +61,9 @@ enum class ApprovalMode {
 struct Settings {
     ProviderId provider = ProviderId::OpenAI;
     std::string model = "gpt-4.1";
-    std::string customEndpoint;
+    // Which custom endpoint is selected when provider == OpenAICompatible.
+    std::string endpointId;
+    std::vector<CustomEndpoint> customEndpoints;
     ApprovalMode approvalMode = ApprovalMode::PreviewThenApprove;
     int requestTimeoutSeconds = 90;
     // Large enough to write a whole file (scripts, forked shaders) in one tool call; a low
@@ -206,8 +231,30 @@ struct ActionProposal {
 };
 
 std::string toString(ProviderId provider);
+std::string providerLabel(ProviderId provider);
 ProviderId providerFromString(const std::string& value);
 std::string defaultModelForProvider(ProviderId provider);
+
+// A custom endpoint is usable on its URL alone: a local server needs no key.
+inline bool accountRequiresApiKey(ProviderId provider) {
+    return provider != ProviderId::OpenAICompatible;
+}
+
+// Built-in providers keep their bare name so existing key files keep working;
+// custom endpoints append their id.
+std::string accountKey(ProviderId provider, const std::string& endpointId);
+std::string accountKey(const Settings& settings);
+
+const CustomEndpoint* findEndpoint(const Settings& settings, const std::string& endpointId);
+std::string activeEndpointUrl(const Settings& settings);
+
+// Built-in providers, then custom endpoints.
+std::vector<ProviderAccount> listAccounts(const Settings& settings);
+
+// Presets offered by the "Add endpoint" menu.
+const std::vector<EndpointPreset>& endpointPresets();
+// Slugifies a label into an id unique among the existing endpoints.
+std::string makeEndpointId(const Settings& settings, const std::string& label);
 
 std::string toString(ChatRole role);
 ChatRole chatRoleFromString(const std::string& value);

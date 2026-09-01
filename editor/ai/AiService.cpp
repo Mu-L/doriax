@@ -203,7 +203,7 @@ bool looksLikeOllamaEndpoint(const Settings& settings) {
     if (settings.provider != ProviderId::OpenAICompatible) {
         return false;
     }
-    std::string endpoint = lowercase(settings.customEndpoint);
+    std::string endpoint = lowercase(activeEndpointUrl(settings));
     return endpoint.find("ollama") != std::string::npos ||
            endpoint.find(":11434") != std::string::npos;
 }
@@ -794,7 +794,7 @@ std::string AiService::buildSystemPrompt() const {
 ProviderRequest AiService::buildRequestSnapshotLocked() const {
     ProviderRequest request;
     request.settings = settings;
-    request.apiKey = SecretStore::getApiKey(settings.provider);
+    request.apiKey = SecretStore::getApiKey(accountKey(settings));
     request.messages = messages;
     compactCompletedToolHistory(request.messages);
     request.tools = EditorActionRegistry::tools();
@@ -857,10 +857,20 @@ void AiService::runProviderRequest(ProviderRequest request, int retryAttempt) {
         ~WakeOnExit() { service->notifyWake(); }
     } wakeOnExit{this};
 
-    if (request.apiKey.empty()) {
+    if (request.apiKey.empty() && accountRequiresApiKey(request.settings.provider)) {
         std::lock_guard<std::mutex> lock(mutex);
-        appendAssistantMessageLocked("No API key set for " + toString(request.settings.provider) +
+        appendAssistantMessageLocked("No API key set for " + providerLabel(request.settings.provider) +
                                      ". Open AI settings to add one before sending requests.");
+        turnFailed = true;
+        busy.store(false);
+        return;
+    }
+
+    if (request.settings.provider == ProviderId::OpenAICompatible &&
+        activeEndpointUrl(request.settings).empty()) {
+        std::lock_guard<std::mutex> lock(mutex);
+        appendAssistantMessageLocked("The selected endpoint has no URL. Open AI settings to set "
+                                     "its Chat Completions URL, or pick another model.");
         turnFailed = true;
         busy.store(false);
         return;

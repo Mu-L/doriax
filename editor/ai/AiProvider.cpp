@@ -305,15 +305,17 @@ public:
 
     HttpRequest buildRequest(const ProviderRequest& request) const override {
         HttpRequest http;
-        http.url = request.settings.customEndpoint.empty()
-            ? "https://openrouter.ai/api/v1/chat/completions"
-            : request.settings.customEndpoint;
-        http.headers = {
-            "Content-Type: application/json",
-            "Authorization: Bearer " + request.apiKey,
-            "HTTP-Referer: https://doriaxengine.org",
-            "X-Title: Doriax Editor"
-        };
+        http.url = activeEndpointUrl(request.settings);
+        http.headers = {"Content-Type: application/json"};
+        // A local server may take no credentials; an empty bearer gets rejected.
+        if (!request.apiKey.empty()) {
+            http.headers.push_back("Authorization: Bearer " + request.apiKey);
+        }
+        // Attribution headers only OpenRouter reads.
+        if (http.url.find("openrouter.ai") != std::string::npos) {
+            http.headers.push_back("HTTP-Referer: https://doriaxengine.org");
+            http.headers.push_back("X-Title: Doriax Editor");
+        }
         http.body = buildChatCompletionsPayload(request).dump();
         return http;
     }
