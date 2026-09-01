@@ -25,7 +25,17 @@
         {
           inherit doriax;
           default = doriax;
-          devShell = pkgs.mkShell {
+        }
+      );
+
+      # `nix develop` only looks at devShells, so this cannot live under packages.
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = (import nixpkgs { inherit system; });
+        in
+        {
+          default = pkgs.mkShell {
             packages = with pkgs; [
               cmake
               curl

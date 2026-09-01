@@ -76,7 +76,8 @@ $RECYCLE.BIN/
 *.lnk
 
 # Nix builds
-result
+/result
+/result-*
 
 # Installation directory for container build artefacts
-installdir
+/installdir

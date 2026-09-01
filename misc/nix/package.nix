@@ -52,6 +52,6 @@ llvmPackages.stdenv.mkDerivation (finalAttrs: {
   ];
 
   cmakeFlags = [
-    "-D DORIAXEDITOR_VERSION=v0.7.1"
+    "-D DORIAXEDITOR_VERSION=${finalAttrs.version}"
   ];
 })
