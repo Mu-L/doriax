@@ -8,6 +8,7 @@
 #include "external/IconsFontAwesome6.h"
 #include "util/UIUtils.h"
 #include "App.h"
+#include "Backend.h"
 #include "Theme.h"
 
 #include <algorithm>
@@ -85,6 +86,7 @@ CustomTextEditor::CustomTextEditor()
     , autoComplete(true)
     , isDragging(false)
     , isDraggingText(false)
+    , cursorBlinkOn(false)
     , mayDragText(false)
     , clickCount(0)
     , scrollX(0)
@@ -3511,6 +3513,12 @@ void CustomTextEditor::renderCursors(ImDrawList* drawList, const ImVec2& origin)
 
     float time = ImGui::GetTime();
     bool showCursor = isDraggingText || (fmod(time, 1.0f) < 0.5f);
+
+    // The loop idles without input, so the blink has to ask for its frames
+    if (showCursor != cursorBlinkOn) {
+        cursorBlinkOn = showCursor;
+        Backend::getApp().requestFrame();
+    }
 
     if (!showCursor) return;
 

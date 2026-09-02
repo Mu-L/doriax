@@ -91,9 +91,12 @@ bool EditorFrame::run(EditorFrameState& state){
         return false;
     }
 
+    // Consumed apart from the test below, which short-circuits
+    const bool frameRequest = app->consumeFrameRequest();
+
     const bool renderRequested = state.forceRedraw || playSessionActive ||
                                  !idleFrame || state.redrawRequested ||
-                                 app->hasPendingMainThreadTasks();
+                                 app->hasPendingMainThreadTasks() || frameRequest;
     const bool frameReady = !state.minimized && renderRequested && renderer->beginFrame();
 
     renderer->newFrame();

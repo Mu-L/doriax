@@ -240,6 +240,7 @@ namespace doriax::editor {
         bool autoComplete;
         bool isDragging;
         bool isDraggingText;
+        bool cursorBlinkOn;
         bool mayDragText;
         std::chrono::steady_clock::time_point lastClickTime;
         TextPosition lastClickPos;

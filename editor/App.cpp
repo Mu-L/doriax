@@ -1810,6 +1810,16 @@ bool editor::App::consumeRedrawRequest() {
     return requested;
 }
 
+void editor::App::requestFrame() {
+    frameRequested = true;
+}
+
+bool editor::App::consumeFrameRequest() {
+    const bool requested = frameRequested;
+    frameRequested = false;
+    return requested;
+}
+
 void editor::App::setWakeCallback(std::function<void()> cb) {
     wakeCallback = cb;
     // The AI service keeps its own copy, so nothing it holds points back here.
