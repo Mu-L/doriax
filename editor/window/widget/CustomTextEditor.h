@@ -331,6 +331,8 @@ namespace doriax::editor {
         std::string inferTypeOfVariable(const std::string& varName, int currentLine) const;
         // Type of the expression ending at endColumn, for member completion and param hints
         std::string inferTypeBefore(int lineIndex, int endColumn) const;
+        // Class or Lua table the cursor is inside, what "this" and "self" resolve to
+        std::string findEnclosingType(int lineIndex) const;
         void tokenizeLine(int lineIndex);
         void tokenizeAll();
         TokenType classifyWord(const std::string& word) const;

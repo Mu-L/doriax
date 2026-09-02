@@ -56,6 +56,16 @@ bool isEngineApiConstructorSymbol(const EngineAPISymbol& sym) {
            detail.rfind(name + "(", 0) == 0;
 }
 
+// Class details name their base as "class Mesh : Object"
+std::string baseClassFromDetail(const std::string& detail) {
+    size_t colonPos = detail.find(" : ");
+    if (colonPos == std::string::npos) return "";
+
+    std::string base = detail.substr(colonPos + 3);
+    while (!base.empty() && base.back() == ' ') base.pop_back();
+    return base;
+}
+
 bool isUtf8Continuation(unsigned char c) {
     return (c & 0xC0) == 0x80;
 }
@@ -370,16 +380,8 @@ void CustomTextEditor::addEngineAPISuggestions() {
         if (it != kindMap.end()) sk = it->second;
         suggestions->AddSymbol(sym.name, sk, sym.detail, sym.parent ? sym.parent : "");
 
-        // Build inheritance map from class detail strings like "class Mesh : Object"
         if (sk == SuggestionKind::Class && sym.detail) {
-            std::string detail = sym.detail;
-            size_t colonPos = detail.find(" : ");
-            if (colonPos != std::string::npos) {
-                std::string className = sym.name;
-                std::string parentName = detail.substr(colonPos + 3);
-                while (!parentName.empty() && parentName.back() == ' ') parentName.pop_back();
-                suggestions->SetClassParent(className, parentName);
-            }
+            suggestions->SetClassParent(sym.name, baseClassFromDetail(sym.detail));
         }
     }
 }
@@ -2073,6 +2075,9 @@ std::string CustomTextEditor::inferTypeBefore(int lineIndex, int endColumn) cons
     // A class or enum name used directly is a static access (Engine.setScene, Scaling.NATIVE)
     if (suggestions && suggestions->IsKnownClassOrEnum(name)) return name;
 
+    // Lua's "self" and C++'s "this" stand for the class the cursor is in
+    if (name == ((language == SyntaxLanguage::Lua) ? "self" : "this")) return findEnclosingType(lineIndex);
+
     std::string type = inferTypeOfVariable(name, lineIndex);
     if (type.empty() && suggestions) {
         type = suggestions->FindSymbolType(name);
@@ -2081,6 +2086,59 @@ std::string CustomTextEditor::inferTypeBefore(int lineIndex, int endColumn) cons
     // Engine API parent types are stored without the namespace
     size_t lastColon = type.rfind(':');
     return (lastColon != std::string::npos) ? type.substr(lastColon + 1) : type;
+}
+
+std::string CustomTextEditor::findEnclosingType(int lineIndex) const {
+    for (int i = std::min(lineIndex, static_cast<int>(lines.size()) - 1); i >= 0; --i) {
+        const std::string& line = lines[i];
+        // Definitions and class declarations start at column 0, so an indented
+        // "Engine::getDeltatime()" never passes for one
+        if (line.empty() || std::isspace(static_cast<unsigned char>(line[0]))) continue;
+
+        if (language == SyntaxLanguage::Lua) {
+            // "function BoxScript:onUpdate()" — the table before '.' or ':' owns the
+            // method, while a plain function encloses nothing
+            if (line.rfind("function ", 0) != 0 && line.rfind("local function ", 0) != 0) continue;
+
+            size_t start = line.find_first_not_of(' ', line.find("function ") + 9);
+            size_t sep = (start != std::string::npos) ? line.find_first_of(".:", start) : std::string::npos;
+            if (sep == std::string::npos || sep > line.find('(')) return "";
+            return line.substr(start, sep - start);
+        }
+
+        // "void BoxScript::onUpdate() {" — the qualifier right before the name is the
+        // class, while "doriax::Vector3 helper()" only names a return type
+        size_t paren = line.find('(');
+        if (paren != std::string::npos) {
+            size_t nameStart = paren;
+            while (nameStart > 0 && std::isspace(static_cast<unsigned char>(line[nameStart - 1]))) nameStart--;
+            while (nameStart > 0 && (std::isalnum(static_cast<unsigned char>(line[nameStart - 1])) || line[nameStart - 1] == '_')) nameStart--;
+
+            if (nameStart >= 2 && line[nameStart - 1] == ':' && line[nameStart - 2] == ':') {
+                std::string owner = wordEndingAt(line, static_cast<int>(nameStart) - 3);
+                if (!owner.empty()) return owner;
+            }
+
+            // An unqualified definition is a free function, no class encloses the cursor
+            size_t comment = line.find("//");
+            std::string code = (comment != std::string::npos) ? line.substr(0, comment) : line;
+            size_t last = code.find_last_not_of(" \t");
+            if (last != std::string::npos && code[last] == '{') return "";
+        }
+
+        // "class BoxScript final : public doriax::Mesh {" — the last word before the base list
+        if (line.rfind("class ", 0) == 0 || line.rfind("struct ", 0) == 0) {
+            std::string head = line.substr(0, line.find_first_of(":{"));
+            std::string name = wordEndingAt(head, static_cast<int>(head.size()) - 1);
+            if (name == "final") {
+                head.resize(head.rfind(name));
+                name = wordEndingAt(head, static_cast<int>(head.size()) - 1);
+            }
+            if (!name.empty() && name != "class" && name != "struct") return name;
+        }
+    }
+
+    return "";
 }
 
 SuggestionContext CustomTextEditor::buildSuggestionContext() const {
@@ -2136,9 +2194,14 @@ SuggestionContext CustomTextEditor::buildSuggestionContext() const {
         }
     }
 
-    if ((ctx.afterDot || ctx.afterArrow || ctx.afterDoubleColon || ctx.afterColon) && !ctx.previousWord.empty()) {
+    const bool memberAccess = ctx.afterDot || ctx.afterArrow || ctx.afterDoubleColon || ctx.afterColon;
+    if (memberAccess && !ctx.previousWord.empty()) {
         // After '::' the previous word already is the type name (Vector3::ZERO)
         ctx.targetType = ctx.afterDoubleColon ? ctx.previousWord : inferTypeBefore(pos.line, checkCol - 1);
+    } else if (!memberAccess && ctx.isCpp) {
+        // Inside a method the class's own members are reached without a receiver.
+        // Lua has no such scope, there every member goes through "self"
+        ctx.enclosingType = findEnclosingType(pos.line);
     }
 
     return ctx;
@@ -2475,7 +2538,7 @@ void CustomTextEditor::UpdateProjectSymbols(const std::vector<ProjectSymbol>& sy
 
     // Engine API symbols are authoritative (real signatures). Engine headers may live
     // inside the project tree, so the project scanner can produce duplicates of the
-    // same members with a generic "project function" detail — skip those.
+    // same members — skip those.
     static const std::unordered_set<std::string> engineKeys = [] {
         std::unordered_set<std::string> keys;
         for (const auto& sym : getEngineAPISymbols()) {
@@ -2488,6 +2551,11 @@ void CustomTextEditor::UpdateProjectSymbols(const std::vector<ProjectSymbol>& sy
     for (const auto& sym : symbols) {
         if (engineKeys.find(sym.name + "\x1f" + sym.parentType) != engineKeys.end()) continue;
         suggestions->AddSymbol(sym.name, sym.kind, sym.detail, sym.parentType, sym.typeInfo);
+
+        // A script derives from an engine class, so its members complete through it
+        if (sym.kind == SuggestionKind::Class) {
+            suggestions->SetClassParent(sym.name, baseClassFromDetail(sym.detail));
+        }
     }
 }
 

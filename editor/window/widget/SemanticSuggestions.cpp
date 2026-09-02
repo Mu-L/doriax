@@ -210,9 +210,12 @@ std::vector<SuggestionItem> SemanticSuggestions::GetSuggestions(const Suggestion
                 continue;
             }
         } else {
-            // Global scope: only top-level symbols (classes, enums, free functions).
-            // Members (methods/properties/enum values) only appear after '.', ':', '->' or '::'
-            if (!symbol.parentType.empty()) continue;
+            // Global scope: top-level symbols (classes, enums, free functions), plus the
+            // members of the class the cursor sits in. Everything else needs an accessor
+            if (!symbol.parentType.empty() &&
+                (context.enclosingType.empty() || !isTypeOrAncestor(context.enclosingType, symbol.parentType))) {
+                continue;
+            }
         }
 
         int score;
@@ -223,6 +226,11 @@ std::vector<SuggestionItem> SemanticSuggestions::GetSuggestions(const Suggestion
             // Boost exact parentType match (direct members over inherited)
             if (restrictToType && symbol.parentType == context.targetType) {
                 item.score += 50;
+            }
+
+            // Own members outrank globals, and declared ones outrank inherited
+            if (!isMemberAccess && !symbol.parentType.empty()) {
+                item.score += (symbol.parentType == context.enclosingType) ? 20 : 10;
             }
 
             // Boost kinds that fit the accessor used

@@ -55,6 +55,7 @@ namespace doriax::editor {
         bool afterDoubleColon = false;       // Is cursor after '::' (scope resolution)
         bool afterColon = false;             // Is cursor after ':' (Lua method access)
         std::string targetType;      // Inferred type for member completion filtering
+        std::string enclosingType;   // Class the cursor is inside — its members need no receiver
         bool isCpp = false;          // True if editing C++ (filters out Lua-only properties)
         bool manualInvoke = false;   // True when triggered explicitly (Ctrl+Space) — bypasses min prefix
     };

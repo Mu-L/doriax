@@ -63,11 +63,110 @@ std::string stripNamespace(const std::string& type) {
     return (lastColon != std::string::npos) ? type.substr(lastColon + 1) : type;
 }
 
+// Identifier ending at 'pos', which moves back to its first character
+std::string wordBefore(const std::string& line, size_t& pos) {
+    while (pos > 0 && (line[pos - 1] == ' ' || line[pos - 1] == '\t')) pos--;
+    size_t end = pos;
+    while (pos > 0 && (std::isalnum(static_cast<unsigned char>(line[pos - 1])) || line[pos - 1] == '_')) pos--;
+    return line.substr(pos, end - pos);
+}
+
+// Value of a quoted field on a Lua table line: name = "speed" -> speed
+std::string quotedField(const std::string& line, const std::string& field) {
+    for (size_t pos = line.find(field); pos != std::string::npos; pos = line.find(field, pos + 1)) {
+        // "displayName" must not pass for "name"
+        if (pos > 0 && (std::isalnum(static_cast<unsigned char>(line[pos - 1])) || line[pos - 1] == '_')) continue;
+
+        size_t assign = skipSpaces(line, pos + field.size());
+        if (assign >= line.size() || line[assign] != '=') continue;
+
+        size_t quote = skipSpaces(line, assign + 1);
+        if (quote >= line.size() || (line[quote] != '"' && line[quote] != '\'')) continue;
+
+        size_t end = line.find(line[quote], quote + 1);
+        if (end != std::string::npos) return line.substr(quote + 1, end - quote - 1);
+    }
+    return "";
+}
+
+// Class a Lua property resolves to, following ProjectUtils::parseLuaPropertiesTable:
+// its primitives name none, anything else is an entity handle of that class
+// ("Mesh", "Camera", a script table), which insertLuaEntityProperty writes on drop
+std::string luaPropertyClass(const std::string& type) {
+    std::string lower = type;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    static const std::unordered_set<std::string> primitives = {
+        "bool", "boolean", "int", "integer", "float", "number", "string",
+        "entity", "entitypointer", "pointer"
+    };
+    if (primitives.count(lower)) return "";
+
+    if (lower == "vector2" || lower == "vec2") return "Vector2";
+    if (lower == "vector3" || lower == "vec3" || lower == "color3") return "Vector3";
+    if (lower == "vector4" || lower == "vec4" || lower == "color4") return "Vector4";
+
+    return type;
+}
+
 void parseLuaSymbols(const std::string& content, std::unordered_set<std::string>& seen, std::vector<ProjectSymbol>& out) {
     std::istringstream stream(content);
     std::string line;
+    std::string tableName;
+    std::string propertyOwner;
+    std::string propertyName;
+    std::string propertyType;
+    int propertyDepth = 0;
 
     while (std::getline(stream, line)) {
+        if (line.compare(skipSpaces(line, 0), 2, "--") == 0) continue;
+
+        if (propertyOwner.empty()) {
+            // "local BoxScript = {" opens the script table
+            size_t assign = line.find('=');
+            if (assign != std::string::npos && line.find('{', assign) != std::string::npos) {
+                std::string name = wordBefore(line, assign);
+                if (!name.empty() && name != "properties") tableName = name;
+            }
+
+            // Its "properties" hold the editor properties, read at runtime as self.<name>.
+            // The table declares them inline, or beside itself as "BoxScript.properties = {"
+            size_t propsPos = line.find("properties");
+            if (propsPos != std::string::npos && line.find('{', propsPos) != std::string::npos) {
+                propertyOwner = tableName;
+                if (propsPos > 0 && line[propsPos - 1] == '.') {
+                    size_t ownerEnd = propsPos - 1;
+                    propertyOwner = wordBefore(line, ownerEnd);
+                }
+                propertyDepth = 0;
+            }
+        }
+
+        if (!propertyOwner.empty()) {
+            // A property entry spans several lines in generated scripts
+            std::string name = quotedField(line, "name");
+            std::string type = quotedField(line, "type");
+            if (!name.empty()) propertyName = name;
+            if (!type.empty()) propertyType = type;
+
+            for (char ch : line) {
+                if (ch == '{') {
+                    propertyDepth++;
+                } else if (ch == '}') {
+                    propertyDepth--;
+                    if (!propertyName.empty() && seen.insert(propertyOwner + "." + propertyName).second) {
+                        out.push_back({propertyName, editor::SuggestionKind::Field, propertyType,
+                                       propertyOwner, luaPropertyClass(propertyType)});
+                    }
+                    propertyName.clear();
+                    propertyType.clear();
+                }
+            }
+            if (propertyDepth <= 0) propertyOwner.clear();
+            continue;
+        }
+
         size_t pos = line.find("function ");
         if (pos != std::string::npos) {
             size_t start = skipSpaces(line, pos + 9);
@@ -81,6 +180,10 @@ void parseLuaSymbols(const std::string& content, std::unordered_set<std::string>
                 if (sep != std::string::npos && sep > 0 && sep + 1 < name.size()) {
                     std::string owner = name.substr(0, sep);
                     std::string method = name.substr(sep + 1);
+                    // The table that owns methods is the script table
+                    if (seen.insert("table " + owner).second) {
+                        out.push_back({owner, editor::SuggestionKind::Class, "script table", "", ""});
+                    }
                     out.push_back({method, editor::SuggestionKind::Method, owner + ":" + method + "()", owner, ""});
                 } else {
                     out.push_back({name, editor::SuggestionKind::Function, "project function", "", ""});
@@ -101,9 +204,40 @@ void parseLuaSymbols(const std::string& content, std::unordered_set<std::string>
     }
 }
 
+// Text between the '(' at 'paren' and its matching ')', empty when it spans lines
+std::string parameterList(const std::string& line, size_t paren) {
+    int depth = 0;
+    for (size_t i = paren; i < line.size(); i++) {
+        if (line[i] == '(') {
+            depth++;
+        } else if (line[i] == ')' && --depth == 0) {
+            return line.substr(paren + 1, i - paren - 1);
+        }
+    }
+    return "";
+}
+
+// First base of "class BoxScript : public doriax::Mesh {" -> "Mesh"
+std::string parseBaseClass(const std::string& line, size_t colon) {
+    if (colon >= line.size() || line[colon] != ':') return "";
+
+    static const std::unordered_set<std::string> accessSpecifiers = {"public", "protected", "private", "virtual"};
+
+    size_t pos = skipSpaces(line, colon + 1);
+    while (pos < line.size()) {
+        size_t end = scanWord(line, pos);
+        if (end == pos) break;
+        if (!accessSpecifiers.count(line.substr(pos, end - pos))) {
+            return stripNamespace(line.substr(pos, scanQualifiedName(line, pos) - pos));
+        }
+        pos = skipSpaces(line, end);
+    }
+    return "";
+}
+
 // Member declared inside a class body: [const] [namespace::]Type[<...>] [*&] name [= ...];
 void parseCppMember(const std::string& line, const std::string& currentClass, std::unordered_set<std::string>& seen, std::vector<ProjectSymbol>& out) {
-    static const char* skipTokens[] = {"(", "public", "private", "protected", "friend", "#",
+    static const char* skipTokens[] = {"public", "private", "protected", "friend", "#",
                                        "DPROPERTY", "REGISTER", "using ", "typedef ", "virtual", "static"};
     for (const char* token : skipTokens) {
         if (line.find(token) != std::string::npos) return;
@@ -113,6 +247,11 @@ void parseCppMember(const std::string& line, const std::string& currentClass, st
     if (decl.empty() || decl[0] == '{' || decl[0] == '}' || decl.rfind("//", 0) == 0) return;
     if (decl.rfind("const ", 0) == 0) decl = decl.substr(6);
 
+    // A '(' before the '=' is a function, after it only an initializer
+    size_t paren = decl.find('(');
+    size_t assign = decl.find('=');
+    if (paren != std::string::npos && (assign == std::string::npos || paren < assign)) return;
+
     size_t typeEnd = 0;
     while (typeEnd < decl.size() && (std::isalnum(static_cast<unsigned char>(decl[typeEnd])) || decl[typeEnd] == '_' || decl[typeEnd] == ':')) typeEnd++;
     if (typeEnd == 0 || typeEnd >= decl.size()) return;
@@ -120,10 +259,8 @@ void parseCppMember(const std::string& line, const std::string& currentClass, st
     std::string type = decl.substr(0, typeEnd);
     if (!startsWithIdentifier(type)) return;
 
-    static const std::unordered_set<std::string> builtinTypes = {
-        "return", "void", "bool", "int", "float", "double", "char", "unsigned", "signed"
-    };
-    if (builtinTypes.count(type)) return;
+    // Primitive types are kept, they hold most of a script's properties
+    if (type == "void" || type == "return") return;
 
     size_t pos = typeEnd;
     if (pos < decl.size() && decl[pos] == '<') {
@@ -153,19 +290,36 @@ void parseCppMember(const std::string& line, const std::string& currentClass, st
 void parseCppSymbols(const std::string& content, std::unordered_set<std::string>& seen, std::vector<ProjectSymbol>& out) {
     std::istringstream stream(content);
     std::string line;
-    std::string currentClass;
+    std::vector<std::pair<std::string, int>> classStack;
     int braceDepth = 0;
-    int classStartDepth = -1;
+    int namespaceDepth = 0;
 
     while (std::getline(stream, line)) {
+        const size_t indent = skipSpaces(line, 0);
+        if (line.compare(indent, 2, "//") == 0) continue;
+
+        // A declaration and the '{' opening its body share a line, so what counts is
+        // the depth the line starts at
+        const int lineDepth = braceDepth;
+
+        // A namespace holds declarations without being a body, so it is not nesting
+        if (line.compare(indent, 10, "namespace ") == 0 && line.find('{') != std::string::npos) {
+            namespaceDepth++;
+        }
+
+        int lineDelta = 0;
         for (char ch : line) {
             if (ch == '{') {
                 braceDepth++;
+                lineDelta++;
             } else if (ch == '}') {
                 braceDepth--;
-                if (classStartDepth >= 0 && braceDepth <= classStartDepth) {
-                    currentClass.clear();
-                    classStartDepth = -1;
+                lineDelta--;
+                while (!classStack.empty() && braceDepth <= classStack.back().second) {
+                    classStack.pop_back();
+                }
+                if (braceDepth < namespaceDepth) {
+                    namespaceDepth = braceDepth;
                 }
             }
         }
@@ -174,20 +328,40 @@ void parseCppSymbols(const std::string& content, std::unordered_set<std::string>
             size_t pos = line.find(keyword);
             if (pos == std::string::npos) continue;
 
-            size_t start = skipSpaces(line, pos + std::strlen(keyword));
-            size_t end = scanWord(line, start);
-            if (end == start) continue;
-
-            std::string name = line.substr(start, end - start);
-            if (name != "{" && seen.insert(name).second) {
-                out.push_back({name, editor::SuggestionKind::Class, "project type", "", ""});
+            // An export macro can precede the name, so it is the last word before the
+            // base list: "class DORIAX_API Mesh : public Object"
+            size_t bodyStart = line.find_first_of(":{;", pos + std::strlen(keyword));
+            // "friend class doriax::Scene;" qualifies the name, it opens no base list
+            while (bodyStart != std::string::npos && line.compare(bodyStart, 2, "::") == 0) {
+                bodyStart = line.find_first_of(":{;", bodyStart + 2);
             }
 
-            currentClass = name;
-            classStartDepth = (line.find('{') != std::string::npos) ? braceDepth - 1 : braceDepth;
+            size_t nameEnd = (bodyStart != std::string::npos) ? bodyStart : line.size();
+            std::string name = wordBefore(line, nameEnd);
+            if (name == "final") name = wordBefore(line, nameEnd);
+            if (name.empty()) continue;
+
+            // Same detail format as the engine API, so both feed the same inheritance map
+            std::string base = parseBaseClass(line, bodyStart);
+            if (seen.insert("class " + name).second) {
+                out.push_back({name, editor::SuggestionKind::Class,
+                               base.empty() ? ("class " + name) : ("class " + name + " : " + base), "", ""});
+            }
+
+            // "class Foo;" is a forward declaration, it opens no body
+            if (bodyStart != std::string::npos && line[bodyStart] == ';') continue;
+
+            // A nested body that also closes here ("struct Config { int a; };") leaves
+            // the enclosing class current
+            if (lineDelta > 0 || line.find('{') == std::string::npos) {
+                classStack.push_back({name, lineDepth});
+            }
         }
 
-        if (!currentClass.empty() && braceDepth > classStartDepth) {
+        const std::string currentClass = classStack.empty() ? "" : classStack.back().first;
+        const bool inClassBody = !classStack.empty() && lineDepth == classStack.back().second + 1;
+        const bool atFileScope = classStack.empty() && lineDepth == namespaceDepth;
+        if (inClassBody) {
             parseCppMember(line, currentClass, seen, out);
         }
 
@@ -202,11 +376,35 @@ void parseCppSymbols(const std::string& content, std::unordered_set<std::string>
         if (end == start) continue;
 
         static const std::unordered_set<std::string> statementKeywords = {
-            "if", "for", "while", "switch", "catch", "return", "sizeof", "new", "delete"
+            "if", "for", "while", "switch", "catch", "return", "throw", "sizeof", "new", "delete"
         };
         std::string name = line.substr(start, end - start);
-        if (startsWithIdentifier(name) && !statementKeywords.count(name) && seen.insert(name).second) {
-            out.push_back({name, editor::SuggestionKind::Function, "project function", currentClass, ""});
+        if (!startsWithIdentifier(name)) continue;
+
+        size_t pos = start;
+        std::string owner = currentClass;
+        if (pos >= 2 && line[pos - 1] == ':' && line[pos - 2] == ':') {
+            pos -= 2;
+            owner = wordBefore(line, pos);
+            // A constructor is reached through the type name, not as a member
+            if (owner.empty() || owner == name) continue;
+        } else if (!inClassBody && !atFileScope) {
+            continue;
+        }
+
+        // A return type in front is what tells a declaration from a call
+        while (pos > 0 && (line[pos - 1] == ' ' || line[pos - 1] == '*' || line[pos - 1] == '&')) pos--;
+        std::string returnType = wordBefore(line, pos);
+        if (returnType.empty() || statementKeywords.count(returnType)) continue;
+
+        // The same name in two classes is two symbols, so the owner belongs in the key
+        if (!seen.insert(owner + "::" + name).second) continue;
+
+        std::string signature = name + "(" + parameterList(line, paren) + ")";
+        if (owner.empty()) {
+            out.push_back({name, editor::SuggestionKind::Function, signature, "", ""});
+        } else {
+            out.push_back({name, editor::SuggestionKind::Method, owner + "::" + signature, owner, ""});
         }
     }
 }
