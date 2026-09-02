@@ -718,26 +718,24 @@ void STBText::createText(const std::string& text, Buffer* buffer, std::vector<ui
         if (offsetX > maxX1)
             maxX1 = offsetX;
             
-        {
-            buffer->addVector3(atrVertice, Vector3(quad.x0, quad.y0, 0));
-            buffer->addVector3(atrVertice, Vector3(quad.x1, quad.y0, 0));
-            buffer->addVector3(atrVertice, Vector3(quad.x1, quad.y1, 0));
-            buffer->addVector3(atrVertice, Vector3(quad.x0, quad.y1, 0));
+        //every glyph is added, UISystem clips the quads to the layout rect
+        buffer->addVector3(atrVertice, Vector3(quad.x0, quad.y0, 0));
+        buffer->addVector3(atrVertice, Vector3(quad.x1, quad.y0, 0));
+        buffer->addVector3(atrVertice, Vector3(quad.x1, quad.y1, 0));
+        buffer->addVector3(atrVertice, Vector3(quad.x0, quad.y1, 0));
 
-            buffer->addVector2(atrTexcoord, Vector2(quad.s0, quad.t0));
-            buffer->addVector2(atrTexcoord, Vector2(quad.s1, quad.t0));
-            buffer->addVector2(atrTexcoord, Vector2(quad.s1, quad.t1));
-            buffer->addVector2(atrTexcoord, Vector2(quad.s0, quad.t1));
-                
-            indices.push_back(ind);
-            indices.push_back(ind+1);
-            indices.push_back(ind+2);
-            indices.push_back(ind);
-            indices.push_back(ind+2);
-            indices.push_back(ind+3);
-            ind = ind + 4;
-        }
+        buffer->addVector2(atrTexcoord, Vector2(quad.s0, quad.t0));
+        buffer->addVector2(atrTexcoord, Vector2(quad.s1, quad.t0));
+        buffer->addVector2(atrTexcoord, Vector2(quad.s1, quad.t1));
+        buffer->addVector2(atrTexcoord, Vector2(quad.s0, quad.t1));
 
+        indices.push_back(ind);
+        indices.push_back(ind+1);
+        indices.push_back(ind+2);
+        indices.push_back(ind);
+        indices.push_back(ind+2);
+        indices.push_back(ind+3);
+        ind = ind + 4;
     }
 
     //a cluster covers every codepoint up to the next one, and they share its glyphs,
