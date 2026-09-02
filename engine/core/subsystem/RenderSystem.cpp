@@ -4980,33 +4980,27 @@ void RenderSystem::destroyCamera(CameraComponent& camera, bool entityDestroyed){
     }
 }
 
-Rect RenderSystem::getScissorRect(UILayoutComponent& layout, ImageComponent& img, Transform& transform, CameraComponent& camera){
-    float viewX = 0;
-    float viewY = 0;
-    float viewWidth = 0;
-    float viewHeight = 0;
+// Rect::fitOnRect moves the origin without shrinking the opposite edge, which widens a
+// scissor that starts outside the bounds
+static Rect intersectScissor(const Rect& rect, const Rect& bounds){
+    float boundsRight = bounds.getX() + bounds.getWidth();
+    float boundsTop = bounds.getY() + bounds.getHeight();
 
-    if (!camera.renderToTexture) {
-        viewX = Engine::getViewRect().getX();
-        viewY = Engine::getViewRect().getY();
-        viewWidth = Engine::getViewRect().getWidth();
-        viewHeight = Engine::getViewRect().getHeight();
-        if (isFixedResolutionActive()){
-            // the main color pass renders into the fixed-resolution target, whose
-            // viewport fills the whole target (no letterbox offset at this stage)
-            viewX = 0;
-            viewY = 0;
-            viewWidth = (float)scene->getFixedResolutionWidth();
-            viewHeight = (float)scene->getFixedResolutionHeight();
-        }else if (swapchainRedirect){
-            // same for the redirected scene color buffer, which is the size of the view rect
-            viewX = 0;
-            viewY = 0;
-        }
-    }else {
-        viewWidth = (float) camera.framebuffer->getWidth();
-        viewHeight = (float) camera.framebuffer->getHeight();
-    }
+    float left = std::min(std::max(rect.getX(), bounds.getX()), boundsRight);
+    float bottom = std::min(std::max(rect.getY(), bounds.getY()), boundsTop);
+    float right = std::max(std::min(rect.getX() + rect.getWidth(), boundsRight), left);
+    float top = std::max(std::min(rect.getY() + rect.getHeight(), boundsTop), bottom);
+
+    return Rect(left, bottom, right - left, top - bottom);
+}
+
+Rect RenderSystem::getScissorRect(UILayoutComponent& layout, ImageComponent& img, Transform& transform, const Rect& passViewport){
+    // the scissor is in the pass target pixels, so it follows the viewport the color pass
+    // applied: offscreen targets start at (0,0), a swapchain keeps the letterbox offset
+    float viewX = passViewport.getX();
+    float viewY = passViewport.getY();
+    float viewWidth = passViewport.getWidth();
+    float viewHeight = passViewport.getHeight();
 
     if (viewWidth <= 0.0f || viewHeight <= 0.0f)
         return Rect(0, 0, 0, 0);
@@ -5021,30 +5015,56 @@ Rect RenderSystem::getScissorRect(UILayoutComponent& layout, ImageComponent& img
     if (localBottom < localTop)
         localBottom = localTop;
 
-    auto projectToScissor = [&](float x, float y) -> Vector2 {
-        Vector4 clip = transform.modelViewProjectionMatrix * Vector4(x, y, 0.0f, 1.0f);
-        if (clip.w != 0.0f){
-            clip.x /= clip.w;
-            clip.y /= clip.w;
-        }
-
-        return Vector2(
-            viewX + ((clip.x + 1.0f) * 0.5f * viewWidth),
-            viewY + ((clip.y + 1.0f) * 0.5f * viewHeight)
-        );
+    Vector4 corners[4] = {
+        transform.modelViewProjectionMatrix * Vector4(localLeft, localTop, 0.0f, 1.0f),
+        transform.modelViewProjectionMatrix * Vector4(localRight, localTop, 0.0f, 1.0f),
+        transform.modelViewProjectionMatrix * Vector4(localRight, localBottom, 0.0f, 1.0f),
+        transform.modelViewProjectionMatrix * Vector4(localLeft, localBottom, 0.0f, 1.0f)
     };
 
-    Vector2 p0 = projectToScissor(localLeft, localTop);
-    Vector2 p1 = projectToScissor(localRight, localTop);
-    Vector2 p2 = projectToScissor(localRight, localBottom);
-    Vector2 p3 = projectToScissor(localLeft, localBottom);
+    // a corner behind the eye has no screen position and a negative w mirrors the rect,
+    // so the quad is clipped against w > 0 first
+    const float EPSILON = 1e-5f;
+    Vector4 visible[8];
+    int visibleCount = 0;
 
-    float minX = std::min(std::min(p0.x, p1.x), std::min(p2.x, p3.x));
-    float minY = std::min(std::min(p0.y, p1.y), std::min(p2.y, p3.y));
-    float maxX = std::max(std::max(p0.x, p1.x), std::max(p2.x, p3.x));
-    float maxY = std::max(std::max(p0.y, p1.y), std::max(p2.y, p3.y));
+    for (int i = 0; i < 4; i++){
+        const Vector4& current = corners[i];
+        const Vector4& next = corners[(i + 1) % 4];
+        bool currentInFront = current.w > EPSILON;
+        bool nextInFront = next.w > EPSILON;
 
-    return Rect(minX, minY, maxX - minX, maxY - minY);
+        if (currentInFront)
+            visible[visibleCount++] = current;
+
+        if (currentInFront != nextInFront)
+            visible[visibleCount++] = current + (next - current) * ((EPSILON - current.w) / (next.w - current.w));
+    }
+
+    if (visibleCount == 0)
+        return Rect(0, 0, 0, 0);
+
+    float minX = 0.0f;
+    float minY = 0.0f;
+    float maxX = 0.0f;
+    float maxY = 0.0f;
+
+    for (int i = 0; i < visibleCount; i++){
+        float screenX = viewX + (((visible[i].x / visible[i].w) + 1.0f) * 0.5f * viewWidth);
+        float screenY = viewY + (((visible[i].y / visible[i].w) + 1.0f) * 0.5f * viewHeight);
+
+        if (i == 0){
+            minX = maxX = screenX;
+            minY = maxY = screenY;
+        }else{
+            minX = std::min(minX, screenX);
+            minY = std::min(minY, screenY);
+            maxX = std::max(maxX, screenX);
+            maxY = std::max(maxY, screenY);
+        }
+    }
+
+    return intersectScissor(Rect(minX, minY, maxX - minX, maxY - minY), passViewport);
 }
 
 void RenderSystem::updateTransform(Transform& transform){
@@ -7122,6 +7142,9 @@ void RenderSystem::draw(){
             camera.render.setLoadActionLoad();
         }
 
+        // the space the UI scissor lives in
+        Rect colorPassViewport;
+
         if (useSSR || usePostProcess){
             // capture the real destination for the composite / post-process chain, then
             // redirect the scene into the offscreen color buffer
@@ -7150,14 +7173,17 @@ void RenderSystem::draw(){
             }
 
             if (useSSR){
+                colorPassViewport = Rect(0, 0, (float)ssrWidth, (float)ssrHeight);
                 camera.render.startRenderPass(&sceneColorFramebuffer.getRender());
-                camera.render.applyViewport(Rect(0, 0, (float)ssrWidth, (float)ssrHeight));
+                camera.render.applyViewport(colorPassViewport);
             }else{
+                colorPassViewport = Rect(0, 0, (float)postProcessWidth, (float)postProcessHeight);
                 camera.render.startRenderPass(&postProcessFramebuffer[0].getRender());
-                camera.render.applyViewport(Rect(0, 0, (float)postProcessWidth, (float)postProcessHeight));
+                camera.render.applyViewport(colorPassViewport);
             }
         }else if (useFixedRes){
             // full offscreen target; letterbox/upscale happens in the blit pass
+            colorPassViewport = Rect(0, 0, (float)fixedResWidth, (float)fixedResHeight);
             camera.render.startRenderPass(&fixedResFramebuffer.getRender());
         }else if (!camera.renderToTexture){
             if (Engine::getFramebuffer()){
@@ -7168,11 +7194,13 @@ void RenderSystem::draw(){
             }else{
                 camera.render.startRenderPass();
             }
-            camera.render.applyViewport(Engine::getViewRect());
+            colorPassViewport = Engine::getViewRect();
+            camera.render.applyViewport(colorPassViewport);
         }else{
             if (!camera.framebuffer->isCreated()){
                 camera.framebuffer->create();
             }
+            colorPassViewport = Rect(0, 0, (float)camera.framebuffer->getWidth(), (float)camera.framebuffer->getHeight());
             camera.render.startRenderPass(&camera.framebuffer->getRender());
         }
 
@@ -7211,32 +7239,52 @@ void RenderSystem::draw(){
                 UILayoutComponent& layout = scene->getComponent<UILayoutComponent>(entity);
 
                 Rect parentScissor;
+                bool parentScissorActive = false;
 
                 if (transform.parent != NULL_ENTITY){
                     Signature parentSignature = scene->getSignature(transform.parent);
                     if (parentSignature.test(scene->getComponentId<UILayoutComponent>())){
                         UILayoutComponent& parentLayout = scene->getComponent<UILayoutComponent>(transform.parent);
 
+                        parentScissorActive = parentLayout.scissorActive;
                         parentScissor = parentLayout.scissor;
-                        if (!parentScissor.isZero()){
-                            if (!layout.ignoreScissor){
-                                camera.render.applyScissor(parentScissor);
-                                layout.scissor = parentScissor;
+                    }
+                }
 
-                                hasActiveScissor = true;
-                            }
-                        }
+                // recomputed every pass, so children never get a stale rect
+                layout.scissorActive = false;
+
+                bool inheritsScissor = parentScissorActive && !layout.ignoreScissor;
+                bool clippedAway = false;
+
+                if (inheritsScissor){
+                    layout.scissor = parentScissor;
+                    layout.scissorActive = true;
+
+                    if (parentScissor.getWidth() <= 0 || parentScissor.getHeight() <= 0){
+                        // sokol widens a scissor to 1x1 on Metal, Vulkan and WebGPU, so an
+                        // empty rect would leak a pixel: skip the draw instead
+                        clippedAway = true;
+                    }else{
+                        camera.render.applyScissor(parentScissor);
+
+                        hasActiveScissor = true;
                     }
                 }
 
                 if (signature.test(scene->getComponentId<ImageComponent>())){
                     ImageComponent& img = scene->getComponent<ImageComponent>(entity);
 
-                    layout.scissor = getScissorRect(layout, img, transform, camera);
-                    if (hasActiveScissor){
-                        layout.scissor = layout.scissor.fitOnRect(parentScissor);
+                    layout.scissor = getScissorRect(layout, img, transform, colorPassViewport);
+                    // applied or not: a clipped away element still passes the empty rect down
+                    if (inheritsScissor){
+                        layout.scissor = intersectScissor(layout.scissor, parentScissor);
                     }
+                    layout.scissorActive = true;
                 }
+
+                if (clippedAway)
+                    continue;
             }
 
             if (signature.test(scene->getComponentId<MeshComponent>())){
@@ -7308,13 +7356,8 @@ void RenderSystem::draw(){
             }
 
             if (hasActiveScissor){
-                if (camera.renderToTexture){
-                    camera.render.applyScissor(Rect(0, 0, camera.framebuffer->getWidth(), camera.framebuffer->getHeight()));
-                }else if (useFixedRes){
-                    camera.render.applyScissor(Rect(0, 0, fixedResWidth, fixedResHeight));
-                }else{
-                    camera.render.applyScissor(Rect(0, 0, System::instance().getScreenWidth(), System::instance().getScreenHeight()));
-                }
+                // screen pixels would overflow an offscreen SSR / post-process attachment
+                camera.render.applyScissor(colorPassViewport);
                 hasActiveScissor = false;
             }
         }

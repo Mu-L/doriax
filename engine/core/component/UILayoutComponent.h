@@ -57,6 +57,7 @@ namespace doriax{
         int containerBoxIndex = -1;
 
         Rect scissor = Rect(0, 0, 0, 0);
+        bool scissorActive = false; // scissor is valid, empty rect included
         bool ignoreScissor = false; // ignore parent scissor
         bool ignoreEvents = false;
 
