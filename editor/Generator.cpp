@@ -987,10 +987,12 @@ void editor::Generator::writeSourceFiles(const fs::path& projectPath, const fs::
     cmakeContent += "    # so suppress the dll-interface warnings that would otherwise flood the build.\n";
     cmakeContent += "    # MSBuild's /m only parallelizes projects. /MP applies the editor-resolved\n";
     cmakeContent += "    # limit to translation units within this single-target plugin project.\n";
+    cmakeContent += "    # /utf-8: generated sources embed UTF-8 literals and carry no BOM, so\n";
+    cmakeContent += "    # MSVC would otherwise decode them in the active code page.\n";
     cmakeContent += "    if(DEFINED DORIAX_PARALLEL_BUILD_JOBS AND DORIAX_PARALLEL_BUILD_JOBS GREATER 0)\n";
-    cmakeContent += "        target_compile_options(" + libName + " PRIVATE /W4 /EHsc /MP${DORIAX_PARALLEL_BUILD_JOBS} /wd4251 /wd4275)\n";
+    cmakeContent += "        target_compile_options(" + libName + " PRIVATE /W4 /EHsc /utf-8 /MP${DORIAX_PARALLEL_BUILD_JOBS} /wd4251 /wd4275)\n";
     cmakeContent += "    else()\n";
-    cmakeContent += "        target_compile_options(" + libName + " PRIVATE /W4 /EHsc /MP /wd4251 /wd4275)\n";
+    cmakeContent += "        target_compile_options(" + libName + " PRIVATE /W4 /EHsc /utf-8 /MP /wd4251 /wd4275)\n";
     cmakeContent += "    endif()\n";
     cmakeContent += "else()\n";
     cmakeContent += "    target_compile_options(" + libName + " PRIVATE -Wall -Wextra -fPIC)\n";

@@ -997,12 +997,15 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
         CXX_STANDARD 17
     )
 
+    # Generated sources embed UTF-8 literals and carry no BOM, so MSVC would
+    # otherwise decode them in the active code page.
     target_compile_options(
         ${APP_NAME}
 
         PUBLIC
 
         ${PLATFORM_OPTIONS}
+        $<$<CXX_COMPILER_ID:MSVC>:/utf-8>
     )
 
     target_link_libraries(

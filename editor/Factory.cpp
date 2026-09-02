@@ -427,54 +427,50 @@ std::string editor::Factory::formatUInt(unsigned int value) {
     return std::to_string(value);
 }
 
+// Escape one byte into a C++ string or char literal. Non-ASCII stays raw in
+// strings for readability, but a lone high byte is not a valid char literal.
+static void appendCppEscape(std::string& out, unsigned char c, bool charLiteral) {
+    const unsigned char quote = charLiteral ? '\'' : '"';
+    if (c == quote || c == '\\') {
+        out.push_back('\\');
+        out.push_back(static_cast<char>(c));
+        return;
+    }
+
+    switch (c) {
+        case '\n': out += "\\n"; return;
+        case '\r': out += "\\r"; return;
+        case '\t': out += "\\t"; return;
+    }
+
+    if (c < 0x20 || c == 0x7F || (charLiteral && c > 0x7F)) {
+        // Always three digits, so a following 0-7 is not absorbed.
+        out.push_back('\\');
+        out.push_back(static_cast<char>('0' + ((c >> 6) & 0x07)));
+        out.push_back(static_cast<char>('0' + ((c >> 3) & 0x07)));
+        out.push_back(static_cast<char>('0' + (c & 0x07)));
+        return;
+    }
+
+    out.push_back(static_cast<char>(c));
+}
+
 std::string editor::Factory::formatString(const std::string& value) {
     std::string result;
     result.reserve(value.size() + 2);
     result.push_back('"');
-
     for (unsigned char c : value) {
-        switch (c) {
-            case '\\':
-                result += "\\\\";
-                break;
-            case '"':
-                result += "\\\"";
-                break;
-            case '\n':
-                result += "\\n";
-                break;
-            case '\r':
-                result += "\\r";
-                break;
-            case '\t':
-                result += "\\t";
-                break;
-            case '\b':
-                result += "\\b";
-                break;
-            case '\f':
-                result += "\\f";
-                break;
-            case '\v':
-                result += "\\v";
-                break;
-            case '\a':
-                result += "\\a";
-                break;
-            default:
-                if (c < 0x20 || c == 0x7F) {
-                    result.push_back('\\');
-                    result.push_back(static_cast<char>('0' + ((c >> 6) & 0x07)));
-                    result.push_back(static_cast<char>('0' + ((c >> 3) & 0x07)));
-                    result.push_back(static_cast<char>('0' + (c & 0x07)));
-                } else {
-                    result.push_back(static_cast<char>(c));
-                }
-                break;
-        }
+        appendCppEscape(result, c, false);
     }
-
     result.push_back('"');
+    return result;
+}
+
+std::string editor::Factory::formatChar(char value) {
+    std::string result;
+    result.push_back('\'');
+    appendCppEscape(result, static_cast<unsigned char>(value), true);
+    result.push_back('\'');
     return result;
 }
 
@@ -1023,13 +1019,7 @@ std::string editor::Factory::createTextEditComponent(int indentSpaces, EntityReg
     code << ind << "textedit.selectionColor = " << formatVector4(textedit.selectionColor) << ";\n";
     code << ind << "textedit.placeholderColor = " << formatVector4(textedit.placeholderColor) << ";\n";
     code << ind << "textedit.placeholder = " << formatString(textedit.placeholder) << ";\n";
-    if (textedit.passwordChar == '\''){
-        code << ind << "textedit.passwordChar = '\\'';\n";
-    }else if (textedit.passwordChar == '\\'){
-        code << ind << "textedit.passwordChar = '\\\\';\n";
-    }else{
-        code << ind << "textedit.passwordChar = '" << textedit.passwordChar << "';\n";
-    }
+    code << ind << "textedit.passwordChar = " << formatChar(textedit.passwordChar) << ";\n";
     code << ind << "textedit.cursorIndex = " << formatInt(textedit.cursorIndex) << ";\n";
     code << ind << "textedit.selectionAnchor = " << formatInt(textedit.selectionAnchor) << ";\n";
     code << ind << "textedit.disabled = " << formatBool(textedit.disabled) << ";\n";
@@ -1951,7 +1941,7 @@ std::string editor::Factory::createModelComponent(int indentSpaces, EntityRegist
     std::ostringstream code;
     const std::string ind = indentation(indentSpaces);
     code << ind << "ModelComponent modelcomp;\n";
-    code << ind << "modelcomp.filename = \"" << model.filename << "\";\n";
+    code << ind << "modelcomp.filename = " << formatString(model.filename) << ";\n";
     code << ind << "modelcomp.mergeStaticMeshes = " << formatBool(model.mergeStaticMeshes) << ";\n";
     code << ind << "modelcomp.skeleton = " << formatEntity(model.skeleton, entityVarNames) << ";\n";
     if (!model.animations.empty()) {

@@ -78,6 +78,7 @@ namespace doriax::editor{
         static std::string formatUInt(unsigned int value);
         static std::string formatEntity(Entity entity, const std::unordered_map<Entity, std::string>* entityVarNames);
         static std::string formatString(const std::string& value);
+        static std::string formatChar(char value);
         static std::string formatAttributeType(AttributeType type);
         static std::string formatAttributeDataType(AttributeDataType type);
         static std::string formatTextureFilter(TextureFilter filter);
