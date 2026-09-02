@@ -116,8 +116,8 @@ bool STBText::addMemoryFace(unsigned char* data, unsigned int length, unsigned i
 }
 
 void STBText::addBuiltInFaces(unsigned int fontSize){
-    //Latin first, the metrics and the .notdef box come from it
-    addMemoryFace(roboto_v20_latin_regular_ttf, roboto_v20_latin_regular_ttf_len, fontSize, "built-in Roboto");
+    //Roboto first, the metrics and the .notdef box come from it
+    addMemoryFace(roboto_regular_ttf, roboto_regular_ttf_len, fontSize, "built-in Roboto");
     addMemoryFace(noto_sans_arabic_ttf, noto_sans_arabic_ttf_len, fontSize, "built-in Noto Sans Arabic");
 }
 

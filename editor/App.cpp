@@ -1259,12 +1259,12 @@ void editor::App::setup() {
     io.Fonts->AddFontFromMemoryTTF(fa_solid_900_ttf, fa_solid_900_ttf_len, 0.0f, &config, icon_ranges);
 
     ImFontConfig config1;
-    strcpy(config1.Name, "roboto-v20-latin-regular (16 px)");
+    strcpy(config1.Name, "roboto-regular (16 px)");
     config1.FontDataOwnedByAtlas = false;
     config1.OversampleH = 2;
     config1.OversampleV = 2;
     config1.RasterizerMultiply = 1.5f;
-    ImFont* font1 = io.Fonts->AddFontFromMemoryTTF(roboto_v20_latin_regular_ttf, roboto_v20_latin_regular_ttf_len, 16.0f, &config1);
+    ImFont* font1 = io.Fonts->AddFontFromMemoryTTF(roboto_regular_ttf, roboto_regular_ttf_len, 16.0f, &config1);
 
     ImFontConfig config2;
     config2.MergeMode = true;
