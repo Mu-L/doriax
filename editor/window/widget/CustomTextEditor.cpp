@@ -3105,7 +3105,7 @@ void CustomTextEditor::handleKeyboardInput() {
                     finalizeUndoRecord();
                 }
             } else {
-                InsertText(std::string(tabSize, ' '));
+                InsertText("\t"); // expanded to the next tab stop
             }
         }
     }
@@ -3313,7 +3313,7 @@ void CustomTextEditor::handleTextInput() {
         for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
             ImWchar c = io.InputQueueCharacters[i];
 
-            if (c < 32 && c != '\t' && c != '\n') continue;
+            if (c < 32) continue; // X11 sends Tab as a character, but the key handler indents
             if (c == 127 || (c >= 0x80 && c <= 0x9F)) continue; // DEL and C1 controls
 
             bool handled = false;
