@@ -230,9 +230,10 @@ int LuaBinding::luaRegisterEventImpl(lua_State* L, int eventIndex, int selfIndex
         return luaL_error(L, "Event registration: method '%s' not found on script", methodName);
     }
 
-    // Build tag if needed
-    std::string tagStr;
-    if (!tag) {
+    // Tag stays on the Lua stack, error raises below longjmp past destructors
+    if (tag) {
+        lua_pushstring(L, tag);
+    } else {
         lua_getfield(L, selfIndex, "__name");
         const char* typeName = lua_tostring(L, -1);
         if (!typeName) {
@@ -248,11 +249,12 @@ int LuaBinding::luaRegisterEventImpl(lua_State* L, int eventIndex, int selfIndex
         std::uintptr_t address = reinterpret_cast<std::uintptr_t>(ptr);
 
         // Format: ClassName_Address_MethodName
-        tagStr = std::string(typeName) + "_" + std::to_string(address) + "_" + methodName;
-        tag = tagStr.c_str();
+        std::string tagStr = std::string(typeName) + "_" + std::to_string(address) + "_" + methodName;
+        lua_pushstring(L, tagStr.c_str());
 
-        lua_pop(L, 1); // pop typeName
+        lua_remove(L, -2); // pop typeName
     }
+    int tagIndex = lua_gettop(L);
 
     // Build closure: function(...) method(self, ...) end
     lua_pushvalue(L, methodFuncIndex); // method
@@ -284,7 +286,7 @@ int LuaBinding::luaRegisterEventImpl(lua_State* L, int eventIndex, int selfIndex
     }
 
     lua_pushvalue(L, eventIndex);
-    lua_pushstring(L, tag);
+    lua_pushvalue(L, tagIndex);
     lua_pushvalue(L, closureIndex);
 
     if (pcallWithTraceback(L, 3, 0) != LUA_OK) {
