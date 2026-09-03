@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 #include <map>
+#include <mutex>
 #ifndef _WIN32
 #include <sys/types.h>
 #endif
@@ -18,6 +20,16 @@ using namespace doriax;
 namespace {
 
     constexpr char PACK_MAGIC[] = {'D', 'X', 'P', 'K', '1'};
+    constexpr const char* PACK_FILENAME = "game.pak";
+
+#ifdef _WIN32
+    typedef __int64 pack_offset_t;
+#else
+    typedef off_t pack_offset_t;
+#endif
+
+    // Still 32-bit on the armeabi-v7a and x86 ABIs, so a larger pack is rejected
+    constexpr uint64_t MAX_PACK_OFFSET = static_cast<uint64_t>(std::numeric_limits<pack_offset_t>::max());
 
     struct PackEntry {
         uint64_t offset = 0;
@@ -27,54 +39,63 @@ namespace {
     };
 
     struct PackState {
-        bool triedLoad = false;
-        bool loaded = false;
         std::string filename;
         std::map<std::string, PackEntry> entries;
     };
 
+    // Same static-destruction guard as TextureDataPool::getMap()
     PackState& state() {
-        static PackState packState;
-        return packState;
+        static PackState* packState = new PackState();
+        return *packState;
     }
 
-    std::string normalizeSeparators(std::string path) {
+    // Filled once, then read-only, so lookups take no lock
+    std::once_flag loadFlag;
+
+    // Keys are '/'-separated and relative to the export root. "." and ".." resolve
+    // like FileData::simplifyPath, so a glTF "models/../textures/a.png" still hits.
+    std::string normalizePath(std::string path) {
         std::replace(path.begin(), path.end(), '\\', '/');
-        return path;
-    }
 
-    std::string simplifyPath(std::string path) {
-        path = normalizeSeparators(path);
-        while (!path.empty() && path.front() == '/') {
-            path.erase(path.begin());
+        std::vector<std::string> parts;
+        for (size_t start = 0; start <= path.size(); ) {
+            const size_t end = path.find('/', start);
+            const std::string part = path.substr(start, end == std::string::npos ? std::string::npos : end - start);
+
+            if (part == "..") {
+                if (!parts.empty()) parts.pop_back();
+            } else if (!part.empty() && part != ".") {
+                parts.push_back(part);
+            }
+
+            if (end == std::string::npos) break;
+            start = end + 1;
         }
-        return path;
+
+        std::string result;
+        for (size_t i = 0; i < parts.size(); i++) {
+            if (i > 0) result += '/';
+            result += parts[i];
+        }
+        return result;
     }
 
     bool startsWith(const std::string& value, const std::string& prefix) {
         return value.rfind(prefix, 0) == 0;
     }
 
-    std::string logicalPackPath(std::string path) {
-        path = normalizeSeparators(path);
+    // Follows FileData::getSystemPath, but only the two packed roots have keys
+    std::string getPackKey(std::string path) {
+        std::replace(path.begin(), path.end(), '\\', '/');
+        if (path.empty()) return "";
 
-        if (startsWith(path, "asset://")) {
-            return "assets/" + simplifyPath(path.substr(8));
-        }
-        if (startsWith(path, "lua://")) {
-            return "lua/" + simplifyPath(path.substr(6));
-        }
-        if (startsWith(path, "shader://")) {
-            return "assets/shaders/" + simplifyPath(path.substr(9));
-        }
-        if (startsWith(path, "data://")) {
-            return "";
-        }
-        if (startsWith(path, "/") || (path.size() > 1 && path[1] == ':')) {
-            return "";
-        }
+        if (startsWith(path, "asset://")) return "assets/" + normalizePath(path.substr(8));
+        if (startsWith(path, "lua://")) return "lua/" + normalizePath(path.substr(6));
 
-        return "assets/" + simplifyPath(path);
+        if (path.find("://") != std::string::npos) return "";
+        if (path.front() == '/' || (path.size() > 1 && path[1] == ':')) return "";
+
+        return "assets/" + normalizePath(path);
     }
 
     bool readExact(FILE* file, void* dst, size_t size) {
@@ -115,32 +136,41 @@ namespace {
 
     bool seekFile(FILE* file, uint64_t offset) {
 #ifdef _WIN32
-        return _fseeki64(file, static_cast<__int64>(offset), SEEK_SET) == 0;
+        return _fseeki64(file, static_cast<pack_offset_t>(offset), SEEK_SET) == 0;
 #else
-        return fseeko(file, static_cast<off_t>(offset), SEEK_SET) == 0;
+        return fseeko(file, static_cast<pack_offset_t>(offset), SEEK_SET) == 0;
 #endif
     }
 
-    bool tryLoadPack(const std::string& filename) {
+    bool getFileSize(FILE* file, uint64_t& size) {
+#ifdef _WIN32
+        if (_fseeki64(file, 0, SEEK_END) != 0) return false;
+        const pack_offset_t end = _ftelli64(file);
+#else
+        if (fseeko(file, 0, SEEK_END) != 0) return false;
+        const pack_offset_t end = ftello(file);
+#endif
+        if (end < 0) return false;
+
+        size = static_cast<uint64_t>(end);
+        return seekFile(file, 0);
+    }
+
+    bool loadPack(const std::string& filename) {
         FILE* file = System::instance().platformFopen(filename.c_str(), "rb");
         if (!file) return false;
 
+        uint64_t packSize = 0;
         char magic[sizeof(PACK_MAGIC)];
         uint32_t fileCount = 0;
-        bool ok = readExact(file, magic, sizeof(magic))
+        bool ok = getFileSize(file, packSize)
+            && packSize <= MAX_PACK_OFFSET
+            && readExact(file, magic, sizeof(magic))
             && std::equal(std::begin(PACK_MAGIC), std::end(PACK_MAGIC), magic)
             && readU32(file, fileCount);
 
-        if (!ok) {
-            std::fclose(file);
-            return false;
-        }
-
-        auto& pack = state();
-        pack.entries.clear();
-        pack.filename = filename;
-
-        for (uint32_t i = 0; i < fileCount; i++) {
+        std::map<std::string, PackEntry> entries;
+        for (uint32_t i = 0; ok && i < fileCount; i++) {
             uint16_t pathLength = 0;
             if (!readU16(file, pathLength) || pathLength == 0) {
                 ok = false;
@@ -162,81 +192,83 @@ namespace {
                 break;
             }
 
-            pack.entries[simplifyPath(path)] = entry;
+            // Bounds come from the file, so a corrupt one must not become an allocation
+            if (entry.offset > packSize || entry.size > packSize - entry.offset
+                || entry.size > UINT32_MAX) {
+                ok = false;
+                break;
+            }
+
+            entries[normalizePath(path)] = entry;
         }
 
         std::fclose(file);
 
-        if (!ok) {
-            pack.entries.clear();
-            pack.filename.clear();
-            return false;
-        }
+        if (!ok) return false;
 
-        pack.loaded = true;
+        state().filename = filename;
+        state().entries = std::move(entries);
         return true;
     }
 
-    void ensureLoaded() {
-        auto& pack = state();
-        if (pack.triedLoad) return;
+    void loadPackOnce() {
+#ifndef DORIAX_EDITOR
+        // Beside the executable on desktop, at the asset root inside an APK
+        if (loadPack(PACK_FILENAME)) return;
 
-        pack.triedLoad = true;
-        pack.loaded = false;
-
-        std::vector<std::string> candidates = {
-            "game.pak",
-            "assets/game.pak"
-        };
-
-        std::string assetPath = simplifyPath(System::instance().getAssetPath());
-        if (!assetPath.empty()) {
-            candidates.push_back(assetPath + "/game.pak");
+        // Used as given: absolute in a macOS bundle, or wherever DORIAX_ASSET_PATH points
+        const std::string assetRoot = System::instance().getAssetPath();
+        if (!assetRoot.empty()) {
+            loadPack(assetRoot + "/" + PACK_FILENAME);
         }
-
-        for (const std::string& candidate : candidates) {
-            if (tryLoadPack(candidate)) return;
-        }
+#endif
     }
 
-    void undoXorAndShift(std::vector<unsigned char>& data, uint8_t key, uint32_t shift) {
+    const PackEntry* findEntry(const std::string& path) {
+        std::call_once(loadFlag, loadPackOnce);
+
+        const PackState& pack = state();
+        if (pack.entries.empty()) return nullptr;
+
+        const std::string key = getPackKey(path);
+        if (key.empty()) return nullptr;
+
+        auto it = pack.entries.find(key);
+        return it != pack.entries.end() ? &it->second : nullptr;
+    }
+
+    // Inverse of Exporter::obfuscate, which rotates right and then XORs
+    void deobfuscate(std::vector<unsigned char>& data, uint8_t key, uint32_t shift) {
         if (data.empty()) return;
 
         for (unsigned char& byte : data) {
             byte ^= key;
         }
 
-        uint32_t normalizedShift = shift % static_cast<uint32_t>(data.size());
-        if (normalizedShift == 0) return;
-
-        std::rotate(data.begin(), data.begin() + normalizedShift, data.end());
+        shift %= data.size();
+        if (shift > 0) {
+            std::rotate(data.begin(), data.begin() + shift, data.end());
+        }
     }
 
 }
 
+bool ResourcePack::contains(const std::string& path) {
+    return findEntry(path) != nullptr;
+}
+
 bool ResourcePack::read(const std::string& path, std::vector<unsigned char>& outData) {
-    ensureLoaded();
+    const PackEntry* entry = findEntry(path);
+    if (!entry) return false;
 
-    auto& pack = state();
-    if (!pack.loaded) return false;
-
-    const std::string normalizedPath = logicalPackPath(path);
-    if (normalizedPath.empty()) return false;
-
-    auto it = pack.entries.find(normalizedPath);
-    if (it == pack.entries.end()) return false;
-
-    FILE* file = System::instance().platformFopen(pack.filename.c_str(), "rb");
+    FILE* file = System::instance().platformFopen(state().filename.c_str(), "rb");
     if (!file) return false;
 
-    const PackEntry& entry = it->second;
-    if (!seekFile(file, entry.offset)) {
-        std::fclose(file);
-        return false;
+    bool ok = seekFile(file, entry->offset);
+    if (ok) {
+        outData.resize(static_cast<size_t>(entry->size));
+        ok = entry->size == 0 || readExact(file, outData.data(), static_cast<size_t>(entry->size));
     }
-
-    outData.resize(static_cast<size_t>(entry.size));
-    const bool ok = entry.size == 0 || readExact(file, outData.data(), static_cast<size_t>(entry.size));
     std::fclose(file);
 
     if (!ok) {
@@ -244,11 +276,6 @@ bool ResourcePack::read(const std::string& path, std::vector<unsigned char>& out
         return false;
     }
 
-    undoXorAndShift(outData, entry.key, entry.shift);
+    deobfuscate(outData, entry->key, entry->shift);
     return true;
-}
-
-void ResourcePack::reset() {
-    auto& pack = state();
-    pack = PackState();
 }

@@ -8,6 +8,7 @@
 #include "buffer/InterleavedBuffer.h"
 #include "io/FileData.h"
 #include "io/Data.h"
+#include "io/ResourcePack.h"
 #include "pool/ModelPool.h"
 #include "thread/ResourceProgress.h"
 #include "thread/ThreadPoolManager.h"
@@ -793,14 +794,13 @@ std::string MeshSystem::readFileToString(const char* filename){
 }
 
 bool MeshSystem::fileExists(const std::string &abs_filename, void *) {
-    File df;
-    int res = df.open(abs_filename.c_str());
-
-    if (!res) {
+    // tinygltf checks here before loading external buffers and images
+    if (ResourcePack::contains(abs_filename)) {
         return true;
     }
 
-    return false;
+    File df;
+    return df.open(abs_filename.c_str()) == FileErrors::FILEDATA_OK;
 }
 
 bool MeshSystem::readWholeFile(std::vector<unsigned char> *out, std::string *err, const std::string &filepath, void *) {

@@ -4053,6 +4053,7 @@ ActionResult EditorActionExecutor::exportProject(const Json& arguments, const st
     config.assetsDir = project->getAssetsPath();
     config.luaDir = project->getLuaPath();
     config.startSceneId = static_cast<uint32_t>(arguments.value("start_scene_id", static_cast<int>(project->getStartSceneId())));
+    config.packNativeResources = project->shouldPackNativeResources();
     std::string error;
     config.selectedBackends = parseBackendList(arguments.value("backends", "all"), error);
     if (!error.empty()) return failResult(error);

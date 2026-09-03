@@ -34,10 +34,15 @@ namespace {
     constexpr float BUILD_PROGRESS_END = 0.95f;
     constexpr float MSBUILD_COMPILE_END = 0.9f;
     constexpr char RESOURCE_PACK_MAGIC[] = {'D', 'X', 'P', 'K', '1'};
+    constexpr const char* RESOURCE_PACK_FILENAME = "game.pak";
+    constexpr const char* RESOURCE_PACK_TEMP_FILENAME = "game.pak.tmp";
+    // The reader seeks with off_t, still 32-bit on the armeabi-v7a and x86 ABIs
+    constexpr uint64_t MAX_RESOURCE_PACK_SIZE = INT32_MAX;
 
     struct ResourcePackBuildEntry {
-        std::string path;
-        std::vector<unsigned char> data;
+        std::string path;      // key inside the pack, relative to the export root
+        fs::path source;
+        uint64_t size = 0;
         uint64_t offset = 0;
         uint8_t key = 0;
         uint32_t shift = 0;
@@ -91,17 +96,31 @@ namespace {
         }
     }
 
-    void shiftRight(std::vector<unsigned char>& data, uint32_t shift) {
+    // Undone by ResourcePack::deobfuscate. Not encryption: the key is in the header.
+    void obfuscate(std::vector<unsigned char>& data, uint8_t key, uint32_t shift) {
         if (data.empty()) return;
-        shift %= static_cast<uint32_t>(data.size());
-        if (shift == 0) return;
-        std::rotate(data.begin(), data.end() - shift, data.end());
-    }
 
-    void applyXor(std::vector<unsigned char>& data, uint8_t key) {
+        shift %= data.size();
+        if (shift > 0) {
+            std::rotate(data.begin(), data.end() - shift, data.end());
+        }
+
         for (unsigned char& byte : data) {
             byte ^= key;
         }
+    }
+
+    bool isReservedPackName(std::string name) {
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return name == RESOURCE_PACK_FILENAME || name == RESOURCE_PACK_TEMP_FILENAME;
+    }
+
+    // From what the header already carries, so both passes agree without the bytes
+    void deriveObfuscation(ResourcePackBuildEntry& entry) {
+        const size_t hash = std::hash<std::string>{}(entry.path) ^ (static_cast<size_t>(entry.size) << 1);
+        entry.key = static_cast<uint8_t>((hash % 255) + 1);
+        entry.shift = entry.size == 0 ? 0 : static_cast<uint32_t>(hash % entry.size);
     }
 
     bool readWholeFile(const fs::path& path, std::vector<unsigned char>& data) {
@@ -250,6 +269,7 @@ void editor::Exporter::runExport() {
         collectSelectedShaderKeys();
         if (isCancelled()) { setError("Export cancelled"); return; }
         if (!buildAndSaveShaders()) return;
+        if (isCancelled()) { setError("Export cancelled"); return; }
 
         setProgress("Shader generation complete", 1.0f);
         {
@@ -279,7 +299,7 @@ void editor::Exporter::runExport() {
     if (!copyEngine()) return;
     if (isCancelled()) { setError("Export cancelled"); return; }
     if (!buildAndSaveShaders()) return;
-    if (config.mode == ExportMode::SourceCode && config.packNativeResources) {
+    if (config.mode == ExportMode::SourceCode) {
         if (isCancelled()) { setError("Export cancelled"); return; }
         if (!collectSourceResourcePack()) return;
     }
@@ -294,6 +314,7 @@ void editor::Exporter::runExport() {
             ? collectDesktopArtifacts()
             : collectWebArtifacts();
         if (!collected) return;
+        if (isCancelled()) { setError("Export cancelled"); return; }
 
         setProgressRaw("Export complete", 1.0f);
         {
@@ -303,6 +324,8 @@ void editor::Exporter::runExport() {
         Out::info("Project exported successfully to: %s", config.destinationDir.string().c_str());
         return;
     }
+
+    if (isCancelled()) { setError("Export cancelled"); return; }
 
     setProgress("Export complete", 1.0f);
     {
@@ -675,19 +698,23 @@ bool editor::Exporter::collectDesktopArtifacts() {
     }
 
     bool packCreated = false;
-    if (config.packNativeResources && !writeNativeResourcePack(config.destinationDir / "game.pak", packCreated)) {
-        return false;
-    }
-    if (!config.packNativeResources) {
-        ec.clear();
-        fs::remove(config.destinationDir / "game.pak", ec);
-        if (ec) {
-            setError("Failed to remove stale resource pack: " + ec.message());
+    if (config.packNativeResources) {
+        if (!writeNativeResourcePack(config.destinationDir / "game.pak", packCreated)) {
+            return false;
+        }
+    } else {
+        if (!removeResourcePack(config.destinationDir / RESOURCE_PACK_FILENAME)) {
             return false;
         }
     }
 
-    if (config.packNativeResources && packCreated) {
+    if (isCancelled()) {
+        // A committed pack stays: nothing else in the destination holds the resources
+        setError("Export cancelled");
+        return false;
+    }
+
+    if (packCreated) {
         for (const char* dir : {"assets", "lua"}) {
             ec.clear();
             fs::remove_all(config.destinationDir / dir, ec);
@@ -697,7 +724,8 @@ bool editor::Exporter::collectDesktopArtifacts() {
             }
         }
     } else {
-        // Default and fallback behavior: ship resource folders next to the executable.
+        // The desktop runtime resolves "assets" and "lua" relative to the working
+        // directory, so ship them next to the executable.
         for (const char* dir : {"assets", "lua"}) {
             fs::path src = projectRoot / dir;
             if (!fs::exists(src, ec)) continue;
@@ -773,6 +801,20 @@ bool editor::Exporter::collectDesktopArtifacts() {
     return true;
 }
 
+// Clears a pack and the temporary an interrupted write may have left beside it.
+bool editor::Exporter::removeResourcePack(const fs::path& packPath) {
+    std::error_code ec;
+    for (const fs::path& path : {packPath, packPath.parent_path() / RESOURCE_PACK_TEMP_FILENAME}) {
+        fs::remove(path, ec);
+        if (ec) {
+            setError("Failed to remove " + path.string() + ": " + ec.message());
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool editor::Exporter::writeNativeResourcePack(const fs::path& outputPath, bool& created) {
     setProgressRaw("Packing resources...", 0.95f);
 
@@ -780,57 +822,95 @@ bool editor::Exporter::writeNativeResourcePack(const fs::path& outputPath, bool&
     std::vector<ResourcePackBuildEntry> entries;
     const fs::path projectRoot = getExportProjectRoot();
 
+    // Written aside and renamed, so a half-written pack is never left for the cleanup
+    const fs::path tempPath = outputPath.parent_path() / RESOURCE_PACK_TEMP_FILENAME;
+
+    // Sizing pass: paths and sizes settle the header, so no bytes are read yet
     std::error_code ec;
     for (const char* rootName : {"assets", "lua"}) {
         const fs::path root = projectRoot / rootName;
-        if (!fs::exists(root, ec)) continue;
 
-        for (const auto& file : fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec)) {
-            if (!file.is_regular_file()) continue;
+        fs::recursive_directory_iterator files(root, fs::directory_options::skip_permission_denied, ec);
+        if (ec == std::errc::no_such_file_or_directory) continue;
+        if (ec) {
+            setError(std::string("Failed to read exported ") + rootName + " directory: " + ec.message());
+            return false;
+        }
 
-            fs::path relPath = fs::relative(file.path(), projectRoot, ec);
-            if (ec || relPath.empty()) continue;
-
-            ResourcePackBuildEntry entry;
-            entry.path = relPath.generic_string();
-            if (entry.path == "assets/game.pak") continue;
-
-            if (!readWholeFile(file.path(), entry.data)) {
-                setError("Failed to read resource for pack: " + file.path().string());
+        for (fs::recursive_directory_iterator end; files != end; files.increment(ec)) {
+            if (isCancelled()) {
+                setError("Export cancelled");
                 return false;
             }
 
-            size_t hash = std::hash<std::string>{}(entry.path) ^ (entry.data.size() << 1);
-            entry.key = static_cast<uint8_t>((hash % 255) + 1);
-            entry.shift = entry.data.empty() ? 0 : static_cast<uint32_t>(hash % entry.data.size());
+            const fs::path filePath = files->path();
+            const bool regular = files->is_regular_file(ec);
+            if (ec) {
+                setError("Failed to read resource for pack: " + filePath.string() + ": " + ec.message());
+                return false;
+            }
+            if (!regular) continue;
+            // A pack left by an earlier export into the same directory is replaced, not packed
+            if (filePath == outputPath || filePath == tempPath) continue;
 
-            shiftRight(entry.data, entry.shift);
-            applyXor(entry.data, entry.key);
+            fs::path relPath = fs::relative(filePath, projectRoot, ec);
+            if (ec || relPath.empty()) {
+                setError("Failed to resolve resource path for pack: " + filePath.string());
+                return false;
+            }
+
+            ResourcePackBuildEntry entry;
+            entry.path = relPath.generic_string();
+            if (entry.path.size() > UINT16_MAX) {
+                setError("Resource path is too long for pack: " + entry.path);
+                return false;
+            }
+
+            const uintmax_t fileSize = fs::file_size(filePath, ec);
+            if (ec) {
+                setError("Failed to read resource size for pack: " + filePath.string() + ": " + ec.message());
+                return false;
+            }
+            // Data::open() reports lengths as unsigned int
+            if (fileSize > UINT32_MAX) {
+                setError("Resource is too large to pack: " + filePath.string());
+                return false;
+            }
+
+            entry.source = filePath;
+            entry.size = static_cast<uint64_t>(fileSize);
+            deriveObfuscation(entry);
 
             entries.push_back(std::move(entry));
+        }
+        // increment() lands on end when it fails, so the loop condition exits first
+        if (ec) {
+            setError(std::string("Failed to walk exported ") + rootName + " directory: " + ec.message());
+            return false;
         }
     }
 
     if (entries.empty()) {
-        fs::remove(outputPath, ec);
-        return true;
+        return removeResourcePack(outputPath);
     }
 
-    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+    std::sort(entries.begin(), entries.end(), [](const ResourcePackBuildEntry& a, const ResourcePackBuildEntry& b) {
         return a.path < b.path;
     });
 
+    // magic + count, then per entry: u16 path length, path, u64 offset, u64 size, u8 key, u32 shift
     uint64_t offset = sizeof(RESOURCE_PACK_MAGIC) + 4;
     for (const auto& entry : entries) {
-        if (entry.path.size() > UINT16_MAX) {
-            setError("Resource path is too long for pack: " + entry.path);
-            return false;
-        }
         offset += 2 + entry.path.size() + 8 + 8 + 1 + 4;
     }
     for (auto& entry : entries) {
         entry.offset = offset;
-        offset += entry.data.size();
+        offset += entry.size;
+    }
+
+    if (offset > MAX_RESOURCE_PACK_SIZE) {
+        setError("Packed resources exceed the 2 GiB limit. Disable Native Resource Pack in Project Settings.");
+        return false;
     }
 
     fs::create_directories(outputPath.parent_path(), ec);
@@ -839,9 +919,9 @@ bool editor::Exporter::writeNativeResourcePack(const fs::path& outputPath, bool&
         return false;
     }
 
-    std::ofstream out(outputPath, std::ios::binary);
+    std::ofstream out(tempPath, std::ios::binary);
     if (!out) {
-        setError("Failed to create resource pack: " + outputPath.string());
+        setError("Failed to create resource pack: " + tempPath.string());
         return false;
     }
 
@@ -852,19 +932,58 @@ bool editor::Exporter::writeNativeResourcePack(const fs::path& outputPath, bool&
         writeU16(out, static_cast<uint16_t>(entry.path.size()));
         out.write(entry.path.data(), static_cast<std::streamsize>(entry.path.size()));
         writeU64(out, entry.offset);
-        writeU64(out, static_cast<uint64_t>(entry.data.size()));
+        writeU64(out, entry.size);
         writeU8(out, entry.key);
         writeU32(out, entry.shift);
     }
 
+    // Write pass: one resource in memory at a time, so packing does not scale with the project
+    std::vector<unsigned char> data;
+    bool bodiesWritten = true;
     for (const auto& entry : entries) {
-        if (!entry.data.empty()) {
-            out.write(reinterpret_cast<const char*>(entry.data.data()), static_cast<std::streamsize>(entry.data.size()));
+        if (isCancelled()) {
+            setError("Export cancelled");
+            bodiesWritten = false;
+            break;
+        }
+        if (!readWholeFile(entry.source, data)) {
+            setError("Failed to read resource for pack: " + entry.source.string());
+            bodiesWritten = false;
+            break;
+        }
+        if (data.size() != entry.size) {
+            setError("Resource changed while packing: " + entry.source.string());
+            bodiesWritten = false;
+            break;
+        }
+
+        obfuscate(data, entry.key, entry.shift);
+        if (!data.empty()) {
+            out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
         }
     }
 
-    if (!out) {
-        setError("Failed to write resource pack: " + outputPath.string());
+    // A flush failure only surfaces on close, and Windows will not remove an open file
+    out.close();
+    if (bodiesWritten && !out) {
+        setError("Failed to write resource pack: " + tempPath.string());
+        bodiesWritten = false;
+    }
+    if (!bodiesWritten) {
+        fs::remove(tempPath, ec);
+        return false;
+    }
+
+    if (isCancelled()) {
+        fs::remove(tempPath, ec);
+        setError("Export cancelled");
+        return false;
+    }
+
+    fs::rename(tempPath, outputPath, ec);
+    if (ec) {
+        setError("Failed to replace resource pack: " + ec.message());
+        fs::remove(tempPath, ec);
         return false;
     }
 
@@ -876,37 +995,59 @@ bool editor::Exporter::collectSourceResourcePack() {
     const fs::path projectRoot = getExportProjectRoot();
     const fs::path assetsDir = projectRoot / "assets";
     const fs::path luaDir = projectRoot / "lua";
-    const fs::path packPath = assetsDir / "game.pak";
+    const fs::path packPath = assetsDir / RESOURCE_PACK_FILENAME;
+
+    // Overwriting an earlier export keeps its files, and a pack shadows the loose trees
+    if (!config.packNativeResources) {
+        return removeResourcePack(packPath);
+    }
 
     bool packCreated = false;
     if (!writeNativeResourcePack(packPath, packCreated)) {
         return false;
     }
-
-    std::error_code ec;
     if (!packCreated) {
         return true;
     }
 
-    for (const auto& entry : fs::directory_iterator(assetsDir, ec)) {
-        if (ec) {
-            setError("Failed to read exported assets directory: " + ec.message());
-            return false;
-        }
-        if (entry.path().filename() == "game.pak") {
-            continue;
-        }
+    if (isCancelled()) {
+        removeResourcePack(packPath);
+        setError("Export cancelled");
+        return false;
+    }
 
-        fs::remove_all(entry.path(), ec);
+    // Only the pack ships, but the lua directory itself stays: the exported Xcode
+    // workspace lists it as a resource folder and fails the build when it is missing.
+    std::error_code ec;
+    std::vector<fs::path> removable;
+    if (!collectPackedTreeEntries(assetsDir, removable, packPath)) return false;
+    if (!collectPackedTreeEntries(luaDir, removable)) return false;
+
+    for (const fs::path& path : removable) {
+        fs::remove_all(path, ec);
         if (ec) {
-            setError("Failed to remove unpacked asset after packing: " + ec.message());
+            setError("Failed to remove unpacked resource after packing: " + path.string() + ": " + ec.message());
             return false;
         }
     }
 
-    fs::remove_all(luaDir, ec);
+    return true;
+}
+
+// Gathers a packed tree's contents before anything is removed, so the walk never
+// mutates the directory it is reading. The directory itself is left in place.
+bool editor::Exporter::collectPackedTreeEntries(const fs::path& dir, std::vector<fs::path>& out, const fs::path& keep) {
+    std::error_code ec;
+    fs::directory_iterator entries(dir, ec);
+    if (ec == std::errc::no_such_file_or_directory) return true;
+
+    for (fs::directory_iterator end; !ec && entries != end; entries.increment(ec)) {
+        if (!keep.empty() && entries->path() == keep) continue;
+
+        out.push_back(entries->path());
+    }
     if (ec) {
-        setError("Failed to remove unpacked Lua directory after packing: " + ec.message());
+        setError("Failed to read exported directory " + dir.string() + ": " + ec.message());
         return false;
     }
 
@@ -1168,6 +1309,14 @@ bool editor::Exporter::copyAssets() {
         // Skip hidden directories (starting with '.') and build directories
         std::string firstComponent = relPath.begin()->string();
         if (!firstComponent.empty() && (firstComponent[0] == '.' || firstComponent == "build")) continue;
+
+        // The engine loads a "game.pak" at the asset root, so the name is reserved.
+        // Matched without case and before the regular-file skip: a directory aliases it too.
+        if (isReservedPackName(firstComponent)) {
+            setError("\"" + firstComponent + "\" is reserved for the resource pack. "
+                "Rename " + entry.path().string());
+            return false;
+        }
 
         // Skip project support files that should not ship as assets
         if (shouldSkipExportSupportFile(relPath)) continue;

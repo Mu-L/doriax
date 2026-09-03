@@ -128,6 +128,8 @@ namespace doriax::editor {
         bool collectDesktopArtifacts();
         bool collectWebArtifacts();
         bool collectSourceResourcePack();
+        bool collectPackedTreeEntries(const fs::path& dir, std::vector<fs::path>& out, const fs::path& keep = fs::path());
+        bool removeResourcePack(const fs::path& packPath);
         bool writeNativeResourcePack(const fs::path& outputPath, bool& created);
         bool clearGenerated();
         bool loadAndSaveAllScenes();

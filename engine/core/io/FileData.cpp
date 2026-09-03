@@ -6,6 +6,7 @@
 
 #include "FileData.h"
 #include "Data.h"
+#include "ResourcePack.h"
 #include "System.h"
 #include <stack>
 
@@ -23,10 +24,11 @@ FileData* FileData::newFile(bool useHandle){
 }
 
 FileData* FileData::newFile(const char *aFilename, bool useHandle){
-    if (!useHandle)
+    // A packed resource has no file to hand a handle to, so it comes back as memory
+    if (!useHandle || (aFilename && ResourcePack::contains(aFilename)))
         return new Data(aFilename);
-    else
-        return new File(aFilename);
+
+    return new File(aFilename);
 }
 
 unsigned int FileData::read8(){

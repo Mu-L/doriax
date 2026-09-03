@@ -522,6 +522,7 @@ int CommandLine::runExportCommand(int argc, char** argv, const char* executableN
     config.assetsDir = options.assetsDir.empty() ? project.getAssetsDir() : options.assetsDir;
     config.luaDir    = options.luaDir.empty()    ? project.getLuaDir()    : options.luaDir;
     config.startSceneId = resolveStartSceneId(project, options.startScene);
+    config.packNativeResources = project.shouldPackNativeResources();
     config.selectedBackends   = options.backends;
     config.selectedShaderKeys = options.shaderKeys;
 

@@ -124,14 +124,18 @@ unsigned int Data::open(unsigned char *aData, unsigned int aDataLength, bool aCo
 unsigned int Data::open(const char *aFilename) {
     if (!aFilename)
         return FileErrors::INVALID_PARAMETER;
+    if (dataOwned)
+        delete[] dataPtr;
     dataPtr = 0;
+    dataLength = 0;
+    dataOwned = false;
     offset = 0;
 
     std::vector<unsigned char> packedData;
     if (ResourcePack::read(aFilename, packedData)) {
         dataLength = static_cast<unsigned int>(packedData.size());
-        dataPtr = dataLength > 0 ? new unsigned char[dataLength] : nullptr;
-        if (dataLength > 0 && dataPtr == NULL)
+        dataPtr = new unsigned char[dataLength];
+        if (dataPtr == NULL)
             return FileErrors::OUT_OF_MEMORY;
         if (dataLength > 0)
             memcpy(dataPtr, packedData.data(), dataLength);
