@@ -7554,9 +7554,8 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
                         SceneManager::setScenePtr(entry.sourceSceneId, entry.runtime->scene);
                     }
                 }
-                if (!hasCppScripts) {
-                    LuaBinding::clearLoadedProjectModules();
-                }
+                // C++ projects run Lua scripts too, through the plugin's initScripts
+                LuaBinding::clearLoadedProjectModules();
 
                 for (const auto& entry : runtimeScenesToInitialize) {
                     if (!entry.runtime) continue;

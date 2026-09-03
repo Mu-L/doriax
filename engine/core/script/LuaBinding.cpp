@@ -69,6 +69,7 @@
 #include <cctype>
 #include <cstring>
 #include <locale>
+#include <set>
 #include <vector>
 #include <memory>
 
@@ -77,6 +78,25 @@ using namespace doriax;
 
 
 lua_State *LuaBinding::luastate = NULL;
+
+// modules the engine itself loads, anything after this is project code
+static std::set<std::string> baselineLuaModules;
+
+// require() reads this registry table, package.loaded is only an alias to it
+static void collectLoadedModuleNames(lua_State* L, std::set<std::string>& out){
+    lua_getfield(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
+
+    lua_pushnil(L);
+    while (lua_next(L, -2) != 0) {
+        // lua_tostring on a number key would break the traversal
+        if (lua_type(L, -2) == LUA_TSTRING) {
+            out.insert(lua_tostring(L, -2));
+        }
+        lua_pop(L, 1);
+    }
+
+    lua_pop(L, 1);
+}
 
 
 LuaBinding::LuaBinding() {
@@ -94,6 +114,8 @@ void LuaBinding::createLuaState(){
     registerClasses(luastate);
     configureProjectLuaLoader();
     registerHelpersFunctions(luastate);
+
+    collectLoadedModuleNames(luastate, baselineLuaModules);
 }
 
 lua_State* LuaBinding::getLuaState(){
@@ -346,7 +368,8 @@ int LuaBinding::setLuaPath(const char* path) {
 int LuaBinding::moduleLoader(lua_State *L) {
     
     const char *filename = lua_tostring(L, 1);
-    filename = luaL_gsub(L, filename, ".", std::to_string(System::instance().getDirSeparator()).c_str());
+    std::string separator(1, System::instance().getDirSeparator());
+    filename = luaL_gsub(L, filename, ".", separator.c_str());
     
     std::string filepath;
     Data filedata;
@@ -377,10 +400,7 @@ int LuaBinding::moduleLoader(lua_State *L) {
 }
 
 void LuaBinding::configureProjectLuaLoader(){
-    std::string luadir = std::string("lua") + System::instance().getDirSeparator();
-
-    setLuaPath("lua://?.lua");
-    setLuaPath(std::string("lua://" + luadir + "?.lua").c_str());
+    // moduleLoader replaces the default searchers, so package.path is never used
     setLuaSearcher(moduleLoader, true);
 }
 
@@ -407,8 +427,6 @@ void LuaBinding::init(){
     lua_State *L = luastate;
 
     std::string luadir = std::string("lua") + System::instance().getDirSeparator();
-
-    configureProjectLuaLoader();
 
     std::string luafile = std::string("lua://") + "main.lua";
     std::string luafile_subdir = std::string("lua://") + luadir + "main.lua";
@@ -589,48 +607,20 @@ void LuaBinding::clearLoadedProjectModules() {
     lua_State* L = luastate;
     if (!L) return;
 
-    lua_getglobal(L, "package");
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        return;
-    }
+    std::set<std::string> loadedModules;
+    collectLoadedModuleNames(L, loadedModules);
 
-    lua_getfield(L, -1, "loaded");
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 2);
-        return;
-    }
+    lua_getfield(L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
 
-    std::vector<std::string> modulesToClear;
+    for (const std::string& moduleName : loadedModules) {
+        if (baselineLuaModules.count(moduleName) > 0) continue;
 
-    lua_pushnil(L);
-    while (lua_next(L, -2) != 0) {
-        if (lua_isstring(L, -2)) {
-            std::string moduleName = lua_tostring(L, -2);
-            std::string filename = moduleName;
-            std::replace(filename.begin(), filename.end(), '.', System::instance().getDirSeparator());
-
-            Data filedata;
-            std::string filepath = "lua://" + filename + ".lua";
-            if (filedata.open(filepath.c_str()) == FileErrors::FILEDATA_OK) {
-                modulesToClear.push_back(moduleName);
-            } else {
-                filepath = "lua://" + std::string("lua") + System::instance().getDirSeparator() + filename + ".lua";
-                if (filedata.open(filepath.c_str()) == FileErrors::FILEDATA_OK) {
-                    modulesToClear.push_back(moduleName);
-                }
-            }
-        }
-        lua_pop(L, 1);
-    }
-
-    for (const std::string& moduleName : modulesToClear) {
         lua_pushnil(L);
         lua_setfield(L, -2, moduleName.c_str());
         Log::debug("Cleared Lua project module cache: %s", moduleName.c_str());
     }
 
-    lua_pop(L, 2);
+    lua_pop(L, 1);
 }
 
 void LuaBinding::initializeLuaScripts(Scene* scene) {
