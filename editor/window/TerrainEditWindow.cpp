@@ -7,9 +7,11 @@
 #include "Catalog.h"
 #include "Out.h"
 #include "command/CommandHandle.h"
+#include "command/type/TerrainMapPatchCmd.h"
 #include "external/IconsFontAwesome6.h"
 #include "subsystem/MeshSystem.h"
 #include "util/TerrainMapFileWriter.h"
+#include "util/TerrainMapUtils.h"
 #include "util/UIUtils.h"
 #include "util/Util.h"
 
@@ -26,6 +28,7 @@
 #include <limits>
 #include <system_error>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 using namespace doriax;
@@ -147,14 +150,6 @@ bool editor::TerrainEditWindow::isOwnedEditableTexturePath(const std::string& pa
     return stem == expectedStem || stem.rfind(expectedStem + "_", 0) == 0;
 }
 
-Texture& editor::TerrainEditWindow::getTerrainTexture(TerrainComponent& terrain, TerrainMapTarget target) const{
-    return target == TerrainMapTarget::HeightMap ? terrain.heightMap : terrain.blendMap;
-}
-
-const char* editor::TerrainEditWindow::getTerrainPropertyName(TerrainMapTarget target){
-    return target == TerrainMapTarget::HeightMap ? "heightMap" : "blendMap";
-}
-
 int editor::TerrainEditWindow::expectedChannels(TerrainMapTarget target){
     return target == TerrainMapTarget::HeightMap ? 1 : 4;
 }
@@ -199,28 +194,6 @@ unsigned char editor::TerrainEditWindow::clampByte(float value){
     return static_cast<unsigned char>(std::max(0.0f, std::min(255.0f, value)));
 }
 
-bool editor::TerrainEditWindow::writeTextureFile(Project* project, const std::string& relativePath, int width, int height, int channels, int bytesPerChannel, const std::vector<unsigned char>& pixels){
-    const size_t expectedSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(channels) * static_cast<size_t>(bytesPerChannel);
-    if (!project || project->getProjectPath().empty() || relativePath.empty() || width <= 0 || height <= 0 || channels <= 0 || pixels.size() < expectedSize){
-        return false;
-    }
-
-    fs::path outputPath = project->resolveAssetPath(relativePath);
-
-    std::error_code ec;
-    fs::create_directories(outputPath.parent_path(), ec);
-    if (ec){
-        Out::warning("Failed to create terrain texture directory: %s", outputPath.parent_path().string().c_str());
-        return false;
-    }
-
-    // Encode + write on the background worker: full-map PNG writes (especially
-    // 16-bit heightmaps) are slow enough to hitch the editor on every stroke end.
-    TerrainMapFileWriter::get().enqueue(outputPath, width, height, channels, bytesPerChannel,
-        std::vector<unsigned char>(pixels.begin(), pixels.begin() + expectedSize));
-    return true;
-}
-
 bool editor::TerrainEditWindow::setFileBackedTextureData(Project* project, Texture& texture, const std::string& relativePath, int width, int height, ColorFormat format, int channels, const std::vector<unsigned char>& pixels){
     const int bytesPerChannel = TextureData::getBytesPerChannel(format);
     const size_t expectedSize = static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(channels) * static_cast<size_t>(bytesPerChannel);
@@ -228,7 +201,7 @@ bool editor::TerrainEditWindow::setFileBackedTextureData(Project* project, Textu
         return false;
     }
 
-    if (!writeTextureFile(project, relativePath, width, height, channels, bytesPerChannel, pixels)){
+    if (!TerrainMapUtils::writeFile(project, relativePath, width, height, channels, bytesPerChannel, pixels)){
         return false;
     }
 
@@ -276,16 +249,6 @@ bool editor::TerrainEditWindow::setFileBackedTextureData(Project* project, Textu
     return true;
 }
 
-bool editor::TerrainEditWindow::hasLoadedData(Texture& texture) const{
-    if (texture.empty() || texture.isFramebuffer()){
-        return false;
-    }
-
-    texture.setReleaseDataAfterLoad(false);
-    TextureLoadResult result = texture.load();
-    return result.state == ResourceLoadState::Finished && result.data && texture.getData().getData();
-}
-
 editor::TerrainMapInfo editor::TerrainEditWindow::getTerrainMapInfo(Texture& texture){
     TerrainMapInfo info;
     info.present = !texture.empty();
@@ -301,7 +264,7 @@ editor::TerrainMapInfo editor::TerrainEditWindow::getTerrainMapInfo(Texture& tex
         return info;
     }
 
-    if (hasLoadedData(texture)){
+    if (TerrainMapUtils::hasLoadedData(texture)){
         TextureData& data = texture.getData();
         info.width = data.getWidth();
         info.height = data.getHeight();
@@ -423,7 +386,7 @@ TerrainMapSnapshot editor::TerrainEditWindow::captureSnapshot(Project* project, 
         return snapshot;
     }
 
-    if (hasLoadedData(texture)){
+    if (TerrainMapUtils::hasLoadedData(texture)){
         TextureData& data = texture.getData();
         snapshot.width = data.getWidth();
         snapshot.height = data.getHeight();
@@ -662,7 +625,7 @@ std::vector<unsigned char> editor::TerrainEditWindow::makeInitialMapPixels(Terra
 
 bool editor::TerrainEditWindow::ensureEditableMap(Project* project, SceneProject* sceneProject, Entity entity, TerrainMapTarget target, int resolution){
     TerrainComponent& terrain = sceneProject->scene->getComponent<TerrainComponent>(entity);
-    Texture& texture = getTerrainTexture(terrain, target);
+    Texture& texture = TerrainMapUtils::getTexture(terrain, target);
     const int channels = expectedChannels(target);
     const ColorFormat format = expectedFormat(target);
 
@@ -681,7 +644,7 @@ bool editor::TerrainEditWindow::ensureEditableMap(Project* project, SceneProject
     TextureData* data = nullptr;
     bool loadedFromFile = false;
 
-    if (hasLoadedData(texture)){
+    if (TerrainMapUtils::hasLoadedData(texture)){
         data = &texture.getData();
     }else if (!path.empty() && loadTerrainTextureDataFromPath(project, path, fileData)){
         data = &fileData;
@@ -774,7 +737,7 @@ bool editor::TerrainEditWindow::raycastTerrainStrokeSurface(const Ray& localRay,
     int currentChannels = 0;
     int currentBytesPerChannel = 1;
 
-    if (!terrain.heightMap.empty() && hasLoadedData(terrain.heightMap)){
+    if (!terrain.heightMap.empty() && TerrainMapUtils::hasLoadedData(terrain.heightMap)){
         TextureData& heightData = terrain.heightMap.getData();
         currentPixels = static_cast<const unsigned char*>(heightData.getData());
         currentWidth = heightData.getWidth();
@@ -961,7 +924,7 @@ void editor::TerrainEditWindow::captureStrokeHeightReference(TerrainComponent& t
     stroke.heightReferenceChannels = 0;
     stroke.heightReferenceBytesPerChannel = 1;
 
-    if (terrain.heightMap.empty() || !hasLoadedData(terrain.heightMap)){
+    if (terrain.heightMap.empty() || !TerrainMapUtils::hasLoadedData(terrain.heightMap)){
         return;
     }
 
@@ -1003,7 +966,7 @@ private:
             return;
         }
 
-        Texture& texture = window->getTerrainTexture(*terrain, target);
+        Texture& texture = TerrainMapUtils::getTexture(*terrain, target);
         window->applySnapshotToTexture(project, texture, snapshot);
 
         if (target == TerrainMapTarget::HeightMap){
@@ -1015,7 +978,7 @@ private:
         }
 
         if (project->isEntityInBundle(sceneId, entity)){
-            project->bundlePropertyChanged(sceneId, entity, ComponentType::TerrainComponent, {window->getTerrainPropertyName(target)});
+            project->bundlePropertyChanged(sceneId, entity, ComponentType::TerrainComponent, {TerrainMapUtils::getPropertyName(target)});
         }
 
         if (restoreModifiedState){
@@ -1187,27 +1150,6 @@ bool editor::TerrainEditWindow::findTerrainHit(Scene* scene, const Ray& ray, Ent
     return true;
 }
 
-void editor::TerrainEditWindow::refreshTerrain(SceneProject* sceneProject, Entity entity, TerrainMapTarget target){
-    if (!sceneProject){
-        return;
-    }
-    TerrainComponent* terrain = sceneProject->scene->findComponent<TerrainComponent>(entity);
-    if (!terrain){
-        return;
-    }
-
-    if (target == TerrainMapTarget::HeightMap){
-        terrain->heightMapLoaded = false;
-        terrain->needUpdateTerrain = true;
-        terrain->needUpdateTexture = true;
-    }else{
-        terrain->needUpdateTexture = true;
-    }
-
-    Texture& texture = getTerrainTexture(*terrain, target);
-    texture.invalidateRender();
-}
-
 // Full-strength height deposition rate in normalized map units per second of painting.
 static constexpr float BRUSH_FLOW_PER_SECOND = 1.5f;
 // Blend painting deposits much faster than height sculpting: switching an area to a
@@ -1237,7 +1179,7 @@ bool editor::TerrainEditWindow::applyBrush(SceneProject* sceneProject, Entity en
         return false;
     }
 
-    Texture& texture = getTerrainTexture(terrain, target);
+    Texture& texture = TerrainMapUtils::getTexture(terrain, target);
     TextureData& data = texture.getData();
     if (!data.getData() || data.getWidth() <= 0 || data.getHeight() <= 0){
         return false;
@@ -1282,7 +1224,7 @@ bool editor::TerrainEditWindow::applyBrush(SceneProject* sceneProject, Entity en
     stroke.lastStampTime = now;
 
     if (applied){
-        refreshTerrain(sceneProject, entity, target);
+        TerrainMapUtils::refresh(sceneProject, entity, target);
     }
     return applied;
 }
@@ -1437,6 +1379,8 @@ bool editor::TerrainEditWindow::stampBrush(TerrainComponent& terrain, TextureDat
         touched = true;
     }
 
+    stroke.dirtyRegion.merge(minX, minY, maxX, maxY);
+
     // Quantize the touched rect from the float working buffer back into the stored
     // pixel data.
     for (int y = minY; y <= maxY; y++){
@@ -1456,6 +1400,48 @@ bool editor::TerrainEditWindow::stampBrush(TerrainComponent& terrain, TextureDat
     return touched;
 }
 
+// Builds the stroke's undo patch, or returns false when the map is no longer the one the stroke
+// started on and the caller must fall back to whole-map snapshots.
+bool editor::TerrainEditWindow::addStrokePatchCommand(SceneProject* sceneProject, Texture& texture){
+    const TerrainMapSnapshot& before = stroke.beforeSnapshot;
+    if (before.pixels.empty() || !stroke.dirtyRegion.fitsIn(before.width, before.height)){
+        return false;
+    }
+
+    const std::string path = texture.getPath(0);
+    if (path.empty() || path != before.path || !TerrainMapUtils::hasLoadedData(texture)){
+        return false;
+    }
+
+    TextureData& data = texture.getData();
+    if (data.getWidth() != before.width || data.getHeight() != before.height ||
+        data.getChannels() != before.channels || data.getColorFormat() != before.colorFormat){
+        return false;
+    }
+
+    const int bytesPerTexel = before.channels * TextureData::getBytesPerChannel(before.colorFormat);
+    const size_t mapBytes = static_cast<size_t>(before.width) * static_cast<size_t>(before.height) * static_cast<size_t>(bytesPerTexel);
+    if (before.pixels.size() < mapBytes || !data.getData() || data.getSize() < mapBytes){
+        return false;
+    }
+
+    TerrainMapPatch patch;
+    patch.path = path;
+    patch.colorFormat = before.colorFormat;
+    patch.mapWidth = before.width;
+    patch.mapHeight = before.height;
+    patch.channels = before.channels;
+    patch.region = stroke.dirtyRegion;
+    patch.beforePixels = TerrainMapUtils::copyRegion(before.pixels.data(), patch.mapWidth, bytesPerTexel, patch.region);
+    patch.afterPixels = TerrainMapUtils::copyRegion(static_cast<const unsigned char*>(data.getData()), patch.mapWidth, bytesPerTexel, patch.region);
+
+    if (patch.beforePixels != patch.afterPixels){
+        CommandHandle::get(sceneProject->id)->addCommandNoMerge(new TerrainMapPatchCmd(project, sceneProject->id, stroke.entity, stroke.target, std::move(patch)));
+    }
+
+    return true;
+}
+
 void editor::TerrainEditWindow::clearStroke(){
     stroke = ActiveStroke();
 }
@@ -1467,7 +1453,7 @@ bool editor::TerrainEditWindow::createMapForTarget(TerrainMapTarget target, int 
     }
 
     TerrainComponent& terrain = sceneProject->scene->getComponent<TerrainComponent>(selectedEntity);
-    Texture& texture = getTerrainTexture(terrain, target);
+    Texture& texture = TerrainMapUtils::getTexture(terrain, target);
 
     const bool forceBeforePixels = texture.getPath(0).empty() || isOwnedEditableTexturePath(texture.getPath(0), sceneProject->id, selectedEntity, target);
     TerrainMapSnapshot before = captureSnapshot(project, texture, forceBeforePixels);
@@ -1500,7 +1486,7 @@ bool editor::TerrainEditWindow::deleteMapForTarget(TerrainMapTarget target){
     }
 
     TerrainComponent& terrain = sceneProject->scene->getComponent<TerrainComponent>(selectedEntity);
-    Texture& texture = getTerrainTexture(terrain, target);
+    Texture& texture = TerrainMapUtils::getTexture(terrain, target);
     if (texture.empty()){
         return false;
     }
@@ -1843,7 +1829,7 @@ bool editor::TerrainEditWindow::isEditingScene(Scene* scene) const{
         return false;
     }
 
-    return !getTerrainTexture(*terrain, getBrushTarget()).empty();
+    return !TerrainMapUtils::getTexture(*terrain, getBrushTarget()).empty();
 }
 
 bool editor::TerrainEditWindow::beginStroke(Scene* scene, const Ray& ray){
@@ -1861,7 +1847,7 @@ bool editor::TerrainEditWindow::beginStroke(Scene* scene, const Ray& ray){
     }
 
     TerrainMapTarget target = getBrushTarget();
-    Texture& texture = getTerrainTexture(scene->getComponent<TerrainComponent>(entity), target);
+    Texture& texture = TerrainMapUtils::getTexture(scene->getComponent<TerrainComponent>(entity), target);
 
     clearStroke();
     stroke.active = true;
@@ -1934,10 +1920,12 @@ void editor::TerrainEditWindow::endStroke(){
     if (sceneProject && sceneProject->scene->isEntityCreated(stroke.entity)){
         TerrainComponent* terrain = sceneProject->scene->findComponent<TerrainComponent>(stroke.entity);
         if (terrain){
-            Texture& texture = getTerrainTexture(*terrain, stroke.target);
-            TerrainMapSnapshot after = captureSnapshot(project, texture, true);
-            if (!snapshotsEqual(stroke.beforeSnapshot, after)){
-                CommandHandle::get(stroke.sceneId)->addCommandNoMerge(new TerrainTextureEditCmd(this, project, stroke.sceneId, stroke.entity, stroke.target, stroke.beforeSnapshot, after));
+            Texture& texture = TerrainMapUtils::getTexture(*terrain, stroke.target);
+            if (!addStrokePatchCommand(sceneProject, texture)){
+                TerrainMapSnapshot after = captureSnapshot(project, texture, true);
+                if (!snapshotsEqual(stroke.beforeSnapshot, after)){
+                    CommandHandle::get(stroke.sceneId)->addCommandNoMerge(new TerrainTextureEditCmd(this, project, stroke.sceneId, stroke.entity, stroke.target, stroke.beforeSnapshot, after));
+                }
             }
         }
     }
@@ -1965,7 +1953,7 @@ bool editor::TerrainEditWindow::updateCursor(Scene* scene, const Ray& ray, Terra
     // topology (including edits still in progress).
     const unsigned char* heightPixels = nullptr;
     int mapWidth = 0, mapHeight = 0, mapChannels = 0, mapBytesPerChannel = 1;
-    if (!terrain.heightMap.empty() && !terrain.heightMap.isFramebuffer() && hasLoadedData(terrain.heightMap)){
+    if (!terrain.heightMap.empty() && !terrain.heightMap.isFramebuffer() && TerrainMapUtils::hasLoadedData(terrain.heightMap)){
         TextureData& heightData = terrain.heightMap.getData();
         heightPixels = static_cast<const unsigned char*>(heightData.getData());
         mapWidth = heightData.getWidth();

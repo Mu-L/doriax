@@ -535,6 +535,7 @@ set(DORIAX_EDITOR_SOURCES
     ${EDITOR_DIR}/util/ScriptParser.cpp
     ${EDITOR_DIR}/util/PngWriter.cpp
     ${EDITOR_DIR}/util/TerrainMapFileWriter.cpp
+    ${EDITOR_DIR}/util/TerrainMapUtils.cpp
     ${EDITOR_DIR}/util/UIUtils.cpp
     ${EDITOR_DIR}/util/CommandRunner.cpp
     ${EDITOR_DIR}/util/ShellEnv.cpp
@@ -616,6 +617,7 @@ set(DORIAX_EDITOR_SOURCES
     ${EDITOR_DIR}/command/type/ComponentToBundleLocalCmd.cpp
     ${EDITOR_DIR}/command/type/ComponentToBundleSharedCmd.cpp
     ${EDITOR_DIR}/command/type/ForkShaderCmd.cpp
+    ${EDITOR_DIR}/command/type/TerrainMapPatchCmd.cpp
 
     ${IMGUI_SOURCES}
     ${BACKEND_SOURCES}
