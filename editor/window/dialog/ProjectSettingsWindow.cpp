@@ -75,13 +75,27 @@ static void drawSettingsPanel(const char* panelId, DrawContents drawContents) {
     ImGui::PopStyleVar(3);
 }
 
+static void helpMarker(const char* desc) {
+    ImGui::TextDisabled("(?)");
+    if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
+        ImGui::TextUnformatted(desc);
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
+}
+
+// Width the value widget gives up so the marker fits beside it.
+static float helpMarkerWidth() {
+    return ImGui::CalcTextSize("(?)").x + ImGui::GetStyle().ItemSpacing.x;
+}
+
 // Returns true when the reset arrow is clicked, like the property rows in Properties.
-static bool beginSettingsRow(const char* label, const char* tooltip = nullptr, bool defChanged = false) {
+static bool beginSettingsRow(const char* label, bool defChanged = false) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
-    if (tooltip) ImGui::SetItemTooltip("%s", tooltip);
 
     bool reset = false;
     if (defChanged) {
@@ -102,40 +116,38 @@ static bool beginSettingsRow(const char* label, const char* tooltip = nullptr, b
     return reset;
 }
 
-static void helpMarker(const char* desc) {
-    ImGui::TextDisabled("(?)");
-    if (ImGui::BeginItemTooltip()) {
-        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-        ImGui::TextUnformatted(desc);
-        ImGui::PopTextWrapPos();
-        ImGui::EndTooltip();
-    }
+static void endSettingsRow(const char* tooltip) {
+    if (!tooltip) return;
+    ImGui::SameLine();
+    helpMarker(tooltip);
 }
 
 static void drawComboSetting(const char* label, const char* id, const char* const* names, int count, int& selectedIndex, int defaultIndex, const char* tooltip = nullptr) {
-    if (beginSettingsRow(label, tooltip, selectedIndex != defaultIndex)) {
+    if (beginSettingsRow(label, selectedIndex != defaultIndex)) {
         selectedIndex = defaultIndex;
     }
     if (selectedIndex < 0 || selectedIndex >= count) selectedIndex = 0;
 
-    ImGui::SetNextItemWidth(-1);
-    if (!ImGui::BeginCombo(id, names[selectedIndex])) return;
-
-    for (int i = 0; i < count; i++) {
-        bool selected = selectedIndex == i;
-        if (ImGui::Selectable(names[i], selected)) selectedIndex = i;
-        if (selected) ImGui::SetItemDefaultFocus();
+    ImGui::SetNextItemWidth(tooltip ? -helpMarkerWidth() : -1.0f);
+    if (ImGui::BeginCombo(id, names[selectedIndex])) {
+        for (int i = 0; i < count; i++) {
+            bool selected = selectedIndex == i;
+            if (ImGui::Selectable(names[i], selected)) selectedIndex = i;
+            if (selected) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
     }
-    ImGui::EndCombo();
+    endSettingsRow(tooltip);
 }
 
 static void drawIntSetting(const char* label, const char* id, int& value, int defaultValue, int minValue = 1, const char* tooltip = nullptr) {
-    if (beginSettingsRow(label, tooltip, value != defaultValue)) {
+    if (beginSettingsRow(label, value != defaultValue)) {
         value = defaultValue;
     }
-    ImGui::SetNextItemWidth(-1);
+    ImGui::SetNextItemWidth(tooltip ? -helpMarkerWidth() : -1.0f);
     ImGui::InputInt(id, &value);
     value = std::max(value, minValue);
+    endSettingsRow(tooltip);
 }
 
 static void drawDirectorySetting(
@@ -149,27 +161,30 @@ static void drawDirectorySetting(
     bool keepAbsolutePathOnError = false
 ) {
     // An empty directory already means the default root
-    if (beginSettingsRow(label, tooltip, !directory.empty() && directory != defaultDirectory)) {
+    if (beginSettingsRow(label, !directory.empty() && directory != defaultDirectory)) {
         directory = defaultDirectory;
     }
 
     const ImGuiStyle& style = ImGui::GetStyle();
     float browseWidth = ImGui::CalcTextSize("Browse").x + style.FramePadding.x * 2.0f;
-    float pathWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - browseWidth - style.ItemSpacing.x);
+    float pathWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - browseWidth - style.ItemSpacing.x - (tooltip ? helpMarkerWidth() : 0.0f));
 
     fs::path displayPath = directory.empty() ? defaultDirectory : directory;
     if (displayPath == ".") displayPath = "<Project root>";
     Widgets::pathDisplay(pathId, displayPath, Vector2(pathWidth, ImGui::GetFrameHeight()));
 
     ImGui::SameLine();
-    if (!project) {
+    bool browse = false;
+    if (project) {
+        browse = ImGui::Button(buttonId);
+    } else {
         ImGui::BeginDisabled();
         ImGui::Button(buttonId);
         ImGui::EndDisabled();
-        return;
     }
+    endSettingsRow(tooltip);
 
-    if (!ImGui::Button(buttonId)) return;
+    if (!browse) return;
 
     std::string selectedPath = FileDialogs::openFileDialog(project->getProjectPath().string(), FILE_DIALOG_ALL, true);
     if (selectedPath.empty()) return;
@@ -184,10 +199,7 @@ static void drawDirectorySetting(
 }
 
 static void drawScriptDirsSetting(Project* project, std::vector<fs::path>& directories) {
-    if (beginSettingsRow("Script Directories",
-            "Extra C++ roots. Each one is an include directory, and the sources under it "
-            "are compiled without a script component referencing them.",
-            !directories.empty())) {
+    if (beginSettingsRow("Script Directories", !directories.empty())) {
         directories.clear();
     }
 
@@ -216,14 +228,18 @@ static void drawScriptDirsSetting(Project* project, std::vector<fs::path>& direc
         directories.erase(directories.begin() + static_cast<std::ptrdiff_t>(removeIndex));
     }
 
-    if (!project) {
+    bool add = false;
+    if (project) {
+        add = ImGui::Button(ICON_FA_PLUS " Add##AddScriptDir");
+    } else {
         ImGui::BeginDisabled();
         ImGui::Button(ICON_FA_PLUS " Add##AddScriptDir");
         ImGui::EndDisabled();
-        return;
     }
+    endSettingsRow("Extra C++ roots. Each one is an include directory, and the sources under it "
+        "are compiled without a script component referencing them.");
 
-    if (!ImGui::Button(ICON_FA_PLUS " Add##AddScriptDir")) return;
+    if (!add) return;
 
     std::string selectedPath = FileDialogs::openFileDialog(project->getProjectPath().string(), FILE_DIALOG_ALL, true);
     if (selectedPath.empty()) return;
@@ -644,25 +660,25 @@ void ProjectSettingsWindow::drawWindowSettings() {
         drawIntSetting("Window Width", "##WindowWidth", m_windowWidth, (int)Project::defaultWindowWidth);
         drawIntSetting("Window Height", "##WindowHeight", m_windowHeight, (int)Project::defaultWindowHeight);
 
-        if (beginSettingsRow("Window Resizable", "Applies to desktop builds. Exported Windows and macOS builds are always resizable.",
-                m_windowResizable != Project::defaultWindowResizable)) {
+        if (beginSettingsRow("Window Resizable", m_windowResizable != Project::defaultWindowResizable)) {
             m_windowResizable = Project::defaultWindowResizable;
         }
         ImGui::Checkbox("##WindowResizable", &m_windowResizable);
+        endSettingsRow("Applies to desktop builds. Exported Windows and macOS builds are always resizable.");
 
-        if (beginSettingsRow("Window Title", nullptr, strcmp(m_windowTitleBuffer, Project::defaultWindowTitle) != 0)) {
+        if (beginSettingsRow("Window Title", strcmp(m_windowTitleBuffer, Project::defaultWindowTitle) != 0)) {
             snprintf(m_windowTitleBuffer, sizeof(m_windowTitleBuffer), "%s", Project::defaultWindowTitle);
         }
         std::string titleHint = m_project->getName().empty() ? "Doriax" : m_project->getName();
         ImGui::SetNextItemWidth(-1);
         ImGui::InputTextWithHint("##WindowTitle", titleHint.c_str(), m_windowTitleBuffer, sizeof(m_windowTitleBuffer));
 
-        beginSettingsRow("Icon", "Application icon for desktop builds: embedded into the Windows executable and used as the window/taskbar icon. Square PNG recommended (256x256 or larger).");
+        beginSettingsRow("Icon");
         {
             const ImGuiStyle& style = ImGui::GetStyle();
             float browseWidth = ImGui::CalcTextSize("Browse").x + style.FramePadding.x * 2.0f;
             float clearWidth = ImGui::CalcTextSize("Clear").x + style.FramePadding.x * 2.0f;
-            float pathWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - browseWidth - clearWidth - style.ItemSpacing.x * 2.0f);
+            float pathWidth = std::max(1.0f, ImGui::GetContentRegionAvail().x - browseWidth - clearWidth - style.ItemSpacing.x * 2.0f - helpMarkerWidth());
 
             fs::path iconDisplay = m_windowIcon.empty() ? fs::path("<None>") : m_windowIcon;
             Widgets::pathDisplay("##WindowIconPath", iconDisplay, Vector2(pathWidth, ImGui::GetFrameHeight()));
@@ -690,6 +706,7 @@ void ProjectSettingsWindow::drawWindowSettings() {
                 m_windowIcon.clear();
             }
             ImGui::EndDisabled();
+            endSettingsRow("Application icon for desktop builds: embedded into the Windows executable and used as the window/taskbar icon. Square PNG recommended (256x256 or larger).");
 
             if (!m_windowIcon.empty()) {
                 if (Texture* thumb = findThumbnail(m_windowIcon.string())) {
@@ -710,12 +727,11 @@ void ProjectSettingsWindow::drawWindowSettings() {
             }
         }
 
-        if (beginSettingsRow("VSync", nullptr, m_vsyncEnabled != Project::defaultVSyncEnabled)) {
+        if (beginSettingsRow("VSync", m_vsyncEnabled != Project::defaultVSyncEnabled)) {
             m_vsyncEnabled = Project::defaultVSyncEnabled;
         }
         ImGui::Checkbox("##VSync", &m_vsyncEnabled);
-        ImGui::SameLine();
-        helpMarker("Synchronize Play mode and supported desktop builds to the display refresh rate. "
+        endSettingsRow("Synchronize Play mode and supported desktop builds to the display refresh rate. "
             "The editor window follows View > Editor VSync. "
             "macOS Metal exports remain synchronized.");
     });
@@ -822,7 +838,7 @@ void ProjectSettingsWindow::drawBuildSettings() {
         drawCMakeSetting();
 
         // Index 0 is the "Default" kit, nothing forced on CMake
-        if (beginSettingsRow("Compiler", nullptr, m_cmakeKitIndex != 0)) {
+        if (beginSettingsRow("Compiler", m_cmakeKitIndex != 0)) {
             m_cmakeKitIndex = 0;
         }
 
@@ -870,11 +886,11 @@ void ProjectSettingsWindow::drawBuildSettings() {
 
         drawIntSetting("Parallel Jobs", "##CMakeBuildJobs", m_cmakeBuildJobs, (int)Project::defaultCMakeBuildJobs, 0, m_cmakeBuildJobsTooltip.c_str());
 
-        if (beginSettingsRow("Native Resource Pack", "Experimental. Packs exported assets and Lua files into resources.pak for Desktop and Android source exports. Packed resources are read into memory, so the File API cannot open them.",
-                m_packNativeResources != Project::defaultPackNativeResources)) {
+        if (beginSettingsRow("Native Resource Pack", m_packNativeResources != Project::defaultPackNativeResources)) {
             m_packNativeResources = Project::defaultPackNativeResources;
         }
         ImGui::Checkbox("##PackNativeResources", &m_packNativeResources);
+        endSettingsRow("Experimental. Packs exported assets and Lua files into resources.pak for Desktop and Android source exports. Packed resources are read into memory, so the File API cannot open them.");
     });
 }
 
