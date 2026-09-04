@@ -20,7 +20,7 @@ using namespace doriax;
 namespace {
 
     constexpr char PACK_MAGIC[] = {'D', 'X', 'P', 'K', '1'};
-    constexpr const char* PACK_FILENAME = "game.pak";
+    constexpr const char* PACK_FILENAME = "resources.pak";
 
 #ifdef _WIN32
     typedef __int64 pack_offset_t;

@@ -34,8 +34,8 @@ namespace {
     constexpr float BUILD_PROGRESS_END = 0.95f;
     constexpr float MSBUILD_COMPILE_END = 0.9f;
     constexpr char RESOURCE_PACK_MAGIC[] = {'D', 'X', 'P', 'K', '1'};
-    constexpr const char* RESOURCE_PACK_FILENAME = "game.pak";
-    constexpr const char* RESOURCE_PACK_TEMP_FILENAME = "game.pak.tmp";
+    constexpr const char* RESOURCE_PACK_FILENAME = "resources.pak";
+    constexpr const char* RESOURCE_PACK_TEMP_FILENAME = "resources.pak.tmp";
     // The reader seeks with off_t, still 32-bit on the armeabi-v7a and x86 ABIs
     constexpr uint64_t MAX_RESOURCE_PACK_SIZE = INT32_MAX;
 
@@ -699,7 +699,7 @@ bool editor::Exporter::collectDesktopArtifacts() {
 
     bool packCreated = false;
     if (config.packNativeResources) {
-        if (!writeNativeResourcePack(config.destinationDir / "game.pak", packCreated)) {
+        if (!writeNativeResourcePack(config.destinationDir / RESOURCE_PACK_FILENAME, packCreated)) {
             return false;
         }
     } else {
@@ -1310,7 +1310,7 @@ bool editor::Exporter::copyAssets() {
         std::string firstComponent = relPath.begin()->string();
         if (!firstComponent.empty() && (firstComponent[0] == '.' || firstComponent == "build")) continue;
 
-        // The engine loads a "game.pak" at the asset root, so the name is reserved.
+        // The engine loads a "resources.pak" at the asset root, so the name is reserved.
         // Matched without case and before the regular-file skip: a directory aliases it too.
         if (isReservedPackName(firstComponent)) {
             setError("\"" + firstComponent + "\" is reserved for the resource pack. "

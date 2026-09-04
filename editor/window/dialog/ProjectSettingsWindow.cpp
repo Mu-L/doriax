@@ -870,7 +870,7 @@ void ProjectSettingsWindow::drawBuildSettings() {
 
         drawIntSetting("Parallel Jobs", "##CMakeBuildJobs", m_cmakeBuildJobs, (int)Project::defaultCMakeBuildJobs, 0, m_cmakeBuildJobsTooltip.c_str());
 
-        if (beginSettingsRow("Native Resource Pack", "Experimental. Packs exported assets and Lua files into game.pak for Desktop and Android source exports. Packed resources are read into memory, so the File API cannot open them.",
+        if (beginSettingsRow("Native Resource Pack", "Experimental. Packs exported assets and Lua files into resources.pak for Desktop and Android source exports. Packed resources are read into memory, so the File API cannot open them.",
                 m_packNativeResources != Project::defaultPackNativeResources)) {
             m_packNativeResources = Project::defaultPackNativeResources;
         }
