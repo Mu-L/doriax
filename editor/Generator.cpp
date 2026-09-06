@@ -202,7 +202,7 @@ bool editor::Generator::resolveDefaultKit(std::string& cCompiler, std::string& c
         }
         return true;
     }
-    Out::error("No compatible C++ build toolchain was found for this editor. Select an available compiler in Project Settings > Build. See https://docs.doriax.org/building/windows/");
+    Out::error("No compatible C++ build toolchain was found for this editor. Select an available compiler in Project Settings > Build.");
     return false;
 }
 
@@ -770,10 +770,10 @@ std::string editor::Generator::getEditorPluginAbiCheck() {
     cmakeContent += "if(DORIAX_EDITOR_PLUGIN)\n";
 #if defined(__MINGW32__)
     cmakeContent += "    if(NOT WIN32 OR NOT MINGW OR MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL \"MSVC\")\n";
-    cmakeContent += "        message(FATAL_ERROR \"This Doriax editor requires MinGW/GNU C++ plugins. Use the same MinGW toolchain that built the editor and engine. See https://docs.doriax.org/building/windows/\")\n";
+    cmakeContent += "        message(FATAL_ERROR \"This Doriax editor requires MinGW/GNU C++ plugins. Use the same MinGW toolchain that built the editor and engine.\")\n";
 #else
     cmakeContent += "    if(NOT WIN32 OR NOT (MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL \"MSVC\"))\n";
-    cmakeContent += "        message(FATAL_ERROR \"This Doriax editor requires MSVC-compatible C++ plugins. MSYS2/MinGW GCC cannot link its engine library. Select an MSVC-compatible compiler in Project Settings > Build, or rebuild the editor and engine with your MinGW toolchain. See https://docs.doriax.org/building/windows/\")\n";
+    cmakeContent += "        message(FATAL_ERROR \"This Doriax editor requires MSVC-compatible C++ plugins. MSYS2/MinGW GCC cannot link its engine library. Select an MSVC-compatible compiler in Project Settings > Build, or rebuild the editor and engine with your MinGW toolchain.\")\n";
 #endif
     cmakeContent += "    endif()\n";
     cmakeContent += "    if(NOT CMAKE_SIZEOF_VOID_P EQUAL " + std::to_string(sizeof(void*)) + ")\n";
@@ -1810,7 +1810,6 @@ std::string editor::Generator::checkBuildTools(bool requireEditorCompatibility, 
             for (const auto& kit : kits) {
                 missing += "  " + kit.displayName + ": " + kit.unavailableReason + "\n";
             }
-            missing += "  See https://docs.doriax.org/building/windows/\n";
         }
     } else {
         hasCompiler = commandExists("cl") || commandExists("g++") || commandExists("clang++") || CommandRunner::hasVSWithCppTools();
