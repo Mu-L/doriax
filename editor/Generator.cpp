@@ -22,6 +22,8 @@
 #include <map>
 #include <unordered_set>
 #include <algorithm>
+#include <functional>
+#include <regex>
 
 #ifdef _WIN32
     #include <windows.h>
@@ -36,6 +38,22 @@
 #endif
 
 using namespace doriax;
+
+std::string editor::Generator::getGeneratorPlatform(const std::string& generator) {
+#ifdef _WIN32
+    if (generator.compare(0, 14, "Visual Studio ") != 0) return "";
+#if defined(_M_ARM64) || defined(__aarch64__)
+    return "ARM64";
+#elif defined(_M_ARM) || defined(__arm__)
+    return "ARM";
+#else
+    return sizeof(void*) == 8 ? "x64" : "Win32";
+#endif
+#else
+    (void)generator;
+    return "";
+#endif
+}
 
 fs::path editor::Generator::getGeneratedPath(const fs::path& projectInternalPath) {
     return projectInternalPath / "generated";
@@ -139,11 +157,25 @@ bool editor::Generator::clearStaleCMakeCache(const fs::path& projectPath, const 
     return true;
 }
 
-void editor::Generator::resolveDefaultKit(std::string& cCompiler, std::string& cxxCompiler, std::string& generator) {
+const editor::CMakeKit* editor::Generator::chooseDefaultKit(const std::vector<CMakeKit>& kits) {
+    const CMakeKit* chosen = nullptr;
+    for (const auto& k : kits) {
+        if (!k.available) continue;
+        // Prefer MSVC on an MSVC editor, including the explicit Ninja/cl
+        // fallback. A MinGW editor has already filtered these kits out.
+        if (k.cxxCompiler.empty() || fs::path(k.cxxCompiler).stem() == "cl") {
+            return &k;
+        }
+        if (!chosen) chosen = &k;
+    }
+    return chosen;
+}
+
+bool editor::Generator::resolveDefaultKit(std::string& cCompiler, std::string& cxxCompiler, std::string& generator) {
     // Only a "Default" selection (everything empty) is resolved; an explicit kit
     // is left untouched.
     if (!cCompiler.empty() || !cxxCompiler.empty() || !generator.empty()) {
-        return;
+        return true;
     }
 
     // Windows-only: a bare cmake lets CMake auto-detect a toolchain that may not
@@ -156,23 +188,11 @@ void editor::Generator::resolveDefaultKit(std::string& cCompiler, std::string& c
     resolveDefault = true;
 #endif
     if (!resolveDefault) {
-        return;
+        return true;
     }
 
     std::vector<CMakeKit> kits = detectAvailableKits();
-    const CMakeKit* chosen = nullptr;
-    for (const auto& k : kits) {
-        if (!k.available) continue;
-        // Prefer the editor's native toolchain: the kit that needs no explicit
-        // compiler or generator (CMake drives it directly, i.e. MSVC on an MSVC
-        // editor). Otherwise fall back to the first available (already
-        // ABI-filtered) kit.
-        if (k.cCompiler.empty() && k.cxxCompiler.empty() && k.generator.empty()) {
-            chosen = &k;
-            break;
-        }
-        if (!chosen) chosen = &k;
-    }
+    const CMakeKit* chosen = chooseDefaultKit(kits);
     if (chosen) {
         cCompiler = chosen->cCompiler;
         cxxCompiler = chosen->cxxCompiler;
@@ -180,7 +200,10 @@ void editor::Generator::resolveDefaultKit(std::string& cCompiler, std::string& c
         if (!chosen->displayName.empty()) {
             Out::info("Default compiler resolved to: %s", chosen->displayName.c_str());
         }
+        return true;
     }
+    Out::error("No compatible C++ build toolchain was found for this editor. Select an available compiler in Project Settings > Build. See https://docs.doriax.org/building/windows/");
+    return false;
 }
 
 bool editor::Generator::configureCMake(const fs::path& projectPath, const fs::path& buildPath, const std::string& configType, const std::string& cCompiler, const std::string& cxxCompiler, const std::string& generator, unsigned int parallelJobs) {
@@ -189,6 +212,9 @@ bool editor::Generator::configureCMake(const fs::path& projectPath, const fs::pa
     }
 
     const fs::path exePath = FileUtils::getExecutableDir();
+    const std::string platform = getGeneratorPlatform(generator);
+    std::string currentKit = generator + "\n" + cCompiler + "\n" + cxxCompiler + "\n" + exePath.string();
+    if (!platform.empty()) currentKit += "\n" + platform;
 
     // Detect kit change: if the compiler/generator selection changed since the
     // last configure, the build tree must be wiped (CMake does not support
@@ -199,7 +225,6 @@ bool editor::Generator::configureCMake(const fs::path& projectPath, const fs::pa
     {
         fs::path kitMarker = buildPath / ".doriax_kit";
         fs::path cacheFile = buildPath / "CMakeCache.txt";
-        std::string currentKit = generator + "\n" + cCompiler + "\n" + cxxCompiler + "\n" + exePath.string();
         if (fs::exists(kitMarker)) {
             std::ifstream f(kitMarker);
             std::string prevKit((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -266,18 +291,21 @@ bool editor::Generator::configureCMake(const fs::path& projectPath, const fs::pa
         std::ifstream cache(cacheFile);
         if (cache.is_open()) {
             const std::string genPrefix = "CMAKE_GENERATOR:INTERNAL=";
+            const std::string platformPrefix = "CMAKE_GENERATOR_PLATFORM:INTERNAL=";
             std::string line;
             std::string cachedGenerator;
+            std::string cachedPlatform;
             while (std::getline(cache, line)) {
                 if (line.compare(0, genPrefix.size(), genPrefix) == 0) {
                     cachedGenerator = line.substr(genPrefix.size());
-                    break;
+                } else if (line.compare(0, platformPrefix.size(), platformPrefix) == 0) {
+                    cachedPlatform = line.substr(platformPrefix.size());
                 }
             }
             cache.close();
-            if (!cachedGenerator.empty() && cachedGenerator != generator) {
-                Out::warning("CMake generator changed (%s -> %s). Cleaning build directory...",
-                    cachedGenerator.c_str(), generator.c_str());
+            if ((!cachedGenerator.empty() && cachedGenerator != generator) ||
+                (!platform.empty() && cachedPlatform != platform)) {
+                Out::warning("CMake generator or architecture changed. Cleaning build directory...");
                 if (!cleanBuildDirectory(buildPath)) {
                     return false;
                 }
@@ -315,6 +343,9 @@ bool editor::Generator::configureCMake(const fs::path& projectPath, const fs::pa
     if (!generator.empty()) {
         cmakeCommand += "-G \"" + generator + "\" ";
     }
+    if (!platform.empty()) {
+        cmakeCommand += "-A " + platform + " ";
+    }
     if (!cCompiler.empty()) {
         cmakeCommand += "-DCMAKE_C_COMPILER=\"" + toCMakePath(cCompiler) + "\" ";
     }
@@ -341,7 +372,7 @@ bool editor::Generator::configureCMake(const fs::path& projectPath, const fs::pa
         fs::create_directories(buildPath, ec);
         std::ofstream f(buildPath / ".doriax_kit");
         if (f.is_open()) {
-            f << generator << "\n" << cCompiler << "\n" << cxxCompiler << "\n" << exePath.string();
+            f << currentKit;
         }
     }
 
@@ -731,6 +762,28 @@ std::string editor::Generator::buildCleanupSceneScriptsSource(const std::vector<
     return sourceContent;
 }
 
+std::string editor::Generator::getEditorPluginAbiCheck() {
+    std::string cmakeContent;
+#ifdef _WIN32
+    // Check CMake's detected ABI: compiler names alone miss Clang targeting
+    // MSVC, and saved/custom kits bypass discovery entirely.
+    cmakeContent += "if(DORIAX_EDITOR_PLUGIN)\n";
+#if defined(__MINGW32__)
+    cmakeContent += "    if(NOT WIN32 OR NOT MINGW OR MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL \"MSVC\")\n";
+    cmakeContent += "        message(FATAL_ERROR \"This Doriax editor requires MinGW/GNU C++ plugins. Use the same MinGW toolchain that built the editor and engine. See https://docs.doriax.org/building/windows/\")\n";
+#else
+    cmakeContent += "    if(NOT WIN32 OR NOT (MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL \"MSVC\"))\n";
+    cmakeContent += "        message(FATAL_ERROR \"This Doriax editor requires MSVC-compatible C++ plugins. MSYS2/MinGW GCC cannot link its engine library. Select an MSVC-compatible compiler in Project Settings > Build, or rebuild the editor and engine with your MinGW toolchain. See https://docs.doriax.org/building/windows/\")\n";
+#endif
+    cmakeContent += "    endif()\n";
+    cmakeContent += "    if(NOT CMAKE_SIZEOF_VOID_P EQUAL " + std::to_string(sizeof(void*)) + ")\n";
+    cmakeContent += "        message(FATAL_ERROR \"C++ plugins must match this Doriax editor's " + std::to_string(sizeof(void*) * 8) + "-bit architecture. Select a matching compiler in Project Settings > Build.\")\n";
+    cmakeContent += "    endif()\n";
+    cmakeContent += "endif()\n\n";
+#endif
+    return cmakeContent;
+}
+
 void editor::Generator::writeSourceFiles(const fs::path& projectPath, const fs::path& projectInternalPath, std::string libName, const std::vector<SceneScriptSource>& scriptFiles, const std::vector<editor::SceneBuildInfo>& scenes, const std::vector<editor::BundleSceneInfo>& bundles, bool vsyncEnabled, const WindowSettings& windowSettings, const fs::path& assetsPath, const fs::path& luaPath, const std::vector<fs::path>& scriptDirs) {
     const fs::path exePath = FileUtils::getExecutableDir();
 
@@ -874,6 +927,7 @@ void editor::Generator::writeSourceFiles(const fs::path& projectPath, const fs::
 
     cmakeContent += "# Build mode: when ON, build as Doriax Editor plugin (shared library)\n";
     cmakeContent += "option(DORIAX_EDITOR_PLUGIN \"Build as Doriax Editor plugin\" OFF)\n";
+    cmakeContent += getEditorPluginAbiCheck();
     cmakeContent += "if(DORIAX_EDITOR_PLUGIN)\n";
     cmakeContent += "    add_compile_definitions(DORIAX_EDITOR_PLUGIN)\n";
     cmakeContent += "    # The editor links its own engine build, which is compiled as a shared\n";
@@ -1667,10 +1721,42 @@ std::vector<editor::CMakeKit> editor::Generator::detectAvailableKits() {
         if (!vsName.empty() || clOnPath) {
             CMakeKit kit;
             kit.displayName = vsName.empty() ? "MSVC" : vsName;
-            // Leave compiler and generator empty: CMake selects the MSVC toolchain
-            // (cl.exe) on its own. Passing an explicit CMAKE_CXX_COMPILER with no
-            // generator would be rejected by configureCMake's guard, since the
-            // Visual Studio generator ignores it (MSBuild always drives cl.exe).
+            // Pin a generator both the selected CMake and an installed VS
+            // support, newest first: MSYS2 CMake would default to Ninja/GCC.
+            const std::string cmakeHelp = runCmd(cmakeExecutable() + " --help");
+            const std::regex vsGenerator("Visual Studio ([0-9]+) [0-9]{4}");
+            std::map<int, std::string, std::greater<int>> generators;
+            for (std::sregex_iterator it(cmakeHelp.begin(), cmakeHelp.end(), vsGenerator), end; it != end; ++it) {
+                generators.emplace(std::stoi((*it)[1].str()), it->str());
+            }
+            for (const auto& entry : generators) {
+                if (!vswhere.empty()) {
+                    const std::string versionRange = "[" + std::to_string(entry.first) + "," + std::to_string(entry.first + 1) + ")";
+                    const std::string name = runCmd("\"" + vswhere + "\" -products * -latest -version \"" + versionRange + "\" -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property displayName");
+                    if (name.empty()) continue;
+                    kit.displayName = name;
+                } else {
+                    // A Developer Command Prompt can work without vswhere.
+                    const char* version = std::getenv("VisualStudioVersion");
+                    if (!version || std::string(version).substr(0, std::string(version).find('.')) != std::to_string(entry.first)) continue;
+                }
+                kit.generator = entry.second;
+                break;
+            }
+            if (kit.generator.empty()) {
+                // Also supports CMake distributions without VS generators.
+                // vcvars supplies cl/SDK paths when cl is not already on PATH.
+                const std::string ninjaPath = findCompiler("ninja");
+                if (!ninjaPath.empty() && !runCmd("\"" + ninjaPath + "\" --version").empty() &&
+                    (clOnPath || !CommandRunner::findVcvarsall().empty())) {
+                    kit.generator = "Ninja";
+                    kit.cCompiler = "cl";
+                    kit.cxxCompiler = "cl";
+                } else {
+                    kit.available = false;
+                    kit.unavailableReason = "requires a CMake version supporting the installed Visual Studio, or Ninja and an MSVC toolchain environment";
+                }
+            }
             enforceAbi(kit, CxxAbi::MSVC, "MSVC");
             kits.push_back(kit);
         }
@@ -1680,7 +1766,7 @@ std::vector<editor::CMakeKit> editor::Generator::detectAvailableKits() {
     return kits;
 }
 
-std::string editor::Generator::checkBuildTools() {
+std::string editor::Generator::checkBuildTools(bool requireEditorCompatibility, CMakeKit* resolvedDefaultKit) {
     std::string missing;
 
 #ifdef _WIN32
@@ -1711,7 +1797,24 @@ std::string editor::Generator::checkBuildTools() {
 
     bool hasCompiler = false;
 #ifdef _WIN32
-    hasCompiler = commandExists("cl") || commandExists("g++") || commandExists("clang++") || CommandRunner::hasVSWithCppTools();
+    if (requireEditorCompatibility) {
+        const auto kits = detectAvailableKits();
+        const CMakeKit* chosen = chooseDefaultKit(kits);
+        hasCompiler = chosen != nullptr;
+        if (chosen && resolvedDefaultKit && missing.empty()) {
+            *resolvedDefaultKit = *chosen;
+            Out::info("Default compiler resolved to: %s", chosen->displayName.c_str());
+        }
+        if (!hasCompiler) {
+            missing += "- C++ toolchain compatible with this editor: not found. Select an available compiler in Project Settings > Build.\n";
+            for (const auto& kit : kits) {
+                missing += "  " + kit.displayName + ": " + kit.unavailableReason + "\n";
+            }
+            missing += "  See https://docs.doriax.org/building/windows/\n";
+        }
+    } else {
+        hasCompiler = commandExists("cl") || commandExists("g++") || commandExists("clang++") || CommandRunner::hasVSWithCppTools();
+    }
 #elif defined(__APPLE__)
     hasCompiler = commandExists("clang++") || commandExists("g++");
 #else
@@ -1720,7 +1823,9 @@ std::string editor::Generator::checkBuildTools() {
 
     if (!hasCompiler) {
 #ifdef _WIN32
-        missing += "- C++ compiler: not found. Install Visual Studio (https://visualstudio.microsoft.com/) and select the \"Desktop development with C++\" workload.\n";
+        if (!requireEditorCompatibility) {
+            missing += "- C++ compiler: not found. Install Visual Studio (https://visualstudio.microsoft.com/) and select the \"Desktop development with C++\" workload.\n";
+        }
 #elif defined(__APPLE__)
         missing += "- C++ compiler: not found. Install Xcode Command Line Tools by running: xcode-select --install\n";
 #else
@@ -1728,6 +1833,8 @@ std::string editor::Generator::checkBuildTools() {
 #endif
     }
 
+    (void)requireEditorCompatibility;
+    (void)resolvedDefaultKit;
     return missing;
 }
 
@@ -1758,7 +1865,9 @@ void editor::Generator::build(const fs::path projectPath, const fs::path project
             // so configure and the build step (which both need the generator, e.g.
             // for the vcvars prefix) agree on the same toolchain.
             std::string cc = cCompiler, cxx = cxxCompiler, gen = generator;
-            resolveDefaultKit(cc, cxx, gen);
+            if (!resolveDefaultKit(cc, cxx, gen)) {
+                return;
+            }
 
             // Resolve automatic mode and the per-machine safety cap once. The
             // exact same value must drive both MSVC /MP and cmake --parallel.

@@ -90,13 +90,14 @@ namespace doriax::editor {
         CommandRunner commandRunner;
 
         static fs::path getGeneratedPath(const fs::path& projectInternalPath);
+        static std::string getEditorPluginAbiCheck();
+        static const CMakeKit* chooseDefaultKit(const std::vector<CMakeKit>& kits);
 
         bool configureCMake(const fs::path& projectPath, const fs::path& buildPath, const std::string& configType, const std::string& cCompiler, const std::string& cxxCompiler, const std::string& generator, unsigned int parallelJobs);
         bool buildProject(const fs::path& projectPath, const fs::path& buildPath, const std::string& configType, const std::string& generator, unsigned int parallelJobs);
-        // Resolve a "Default" (all-empty) compiler selection to the best
-        // ABI-compatible detected kit so it respects the same ABI check as the
-        // Project Settings dropdown. No-op on non-Windows. Modifies in place.
-        void resolveDefaultKit(std::string& cCompiler, std::string& cxxCompiler, std::string& generator);
+        // Resolve a "Default" (all-empty) selection in place to the best
+        // ABI-compatible kit. No-op off Windows; false if none is compatible.
+        bool resolveDefaultKit(std::string& cCompiler, std::string& cxxCompiler, std::string& generator);
         bool runCommand(const std::string& command, const fs::path& workingDir);
         bool clearStaleCMakeCache(const fs::path& projectPath, const fs::path& buildPath);
         // Remove CMake's cached configuration so the next configure starts clean.
@@ -112,8 +113,13 @@ namespace doriax::editor {
     public:
         Generator();
         ~Generator();
-        static std::string checkBuildTools();
+        // Export rebuilds the engine, so it does not need the editor's ABI.
+        // Optionally returns the resolved Default kit for the caller to reuse.
+        static std::string checkBuildTools(bool requireEditorCompatibility = false, CMakeKit* resolvedDefaultKit = nullptr);
         static std::vector<CMakeKit> detectAvailableKits();
+        // Explicit Visual Studio kits target the editor's architecture in both
+        // Play and Export. Empty for Default and non-VS/non-Windows generators.
+        static std::string getGeneratorPlatform(const std::string& generator);
         static CMakeInfo detectCMake();
         // cmake for a command line: the configured path (quoted) or plain
         // "cmake" for PATH to resolve.

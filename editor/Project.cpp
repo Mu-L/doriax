@@ -7502,7 +7502,14 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
         const bool hasCppScripts = !mergedCppScripts.empty();
 
         if (hasCppScripts) {
-            std::string missingTools = Generator::checkBuildTools();
+            // Default needs a discoverable compatible kit; explicit kits may
+            // live outside PATH and are ABI-checked by the generated CMake.
+            const bool useDefaultKit = cmakeCCompiler.empty() && cmakeCxxCompiler.empty() && cmakeGenerator.empty();
+            CMakeKit playKit;
+            playKit.cCompiler = cmakeCCompiler;
+            playKit.cxxCompiler = cmakeCxxCompiler;
+            playKit.generator = cmakeGenerator;
+            std::string missingTools = Generator::checkBuildTools(useDefaultKit, &playKit);
             if (!missingTools.empty()) {
                 failPlayStartup(session, sceneId, "Cannot build C++ scripts: missing build tools", "Missing Build Tools",
                     "C++ scripts require build tools that were not found on your system:\n\n" + missingTools +
@@ -7511,7 +7518,7 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
             }
 
             fs::path buildPath = getProjectInternalPath() / "build";
-            generator.build(getProjectPath(), getProjectInternalPath(), buildPath, cmakeCCompiler, cmakeCxxCompiler, cmakeGenerator, requestedBuildJobs);
+            generator.build(getProjectPath(), getProjectInternalPath(), buildPath, playKit.cCompiler, playKit.cxxCompiler, playKit.generator, requestedBuildJobs);
             generator.waitForBuildToComplete();
 
             if (isCancelled()) { markStartupDone(); return; }

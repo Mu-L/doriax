@@ -485,6 +485,10 @@ bool editor::Exporter::configureBuild() {
 
     const fs::path buildDir = config.targetDir / "build";
 
+    // Only explicit VS kits are pinned. Default export may freely select a
+    // different toolchain because it rebuilds the engine from source.
+    const std::string platform = config.mode == ExportMode::Desktop
+        ? Generator::getGeneratorPlatform(config.cmakeGenerator) : "";
     std::string emcmake;
     std::string kitId;
     if (config.mode == ExportMode::Web) {
@@ -511,6 +515,7 @@ bool editor::Exporter::configureBuild() {
             return false;
         }
         kitId = "desktop\n" + effectiveGenerator + "\n" + config.cmakeCCompiler + "\n" + config.cmakeCxxCompiler + "\n" + config.buildType + "\n" + config.graphicBackend;
+        if (!platform.empty()) kitId += "\n" + platform;
     }
 
     // CMake cannot switch generators or toolchains in place and its cache pins
@@ -555,6 +560,9 @@ bool editor::Exporter::configureBuild() {
         cmd = Generator::cmakeExecutable() + " ";
         if (!config.cmakeGenerator.empty()) {
             cmd += "-G \"" + config.cmakeGenerator + "\" ";
+        }
+        if (!platform.empty()) {
+            cmd += "-A " + platform + " ";
         }
         if (!config.cmakeCCompiler.empty()) {
             cmd += "-DCMAKE_C_COMPILER=\"" + toCMakePath(config.cmakeCCompiler) + "\" ";

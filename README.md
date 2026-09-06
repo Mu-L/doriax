@@ -167,6 +167,8 @@ cmake --install build --prefix dist
 
 #### Windows (Visual Studio)
 
+The official Windows download is built with MSVC. C++ scripts played inside that editor must use an MSVC-compatible toolchain with the same architecture; MSYS2 GCC cannot link against its engine library. In **Project Settings > Build**, select an available compatible compiler or **Default**, which resolves to a compatible toolchain. See [Building for Windows](https://docs.doriax.org/building/windows/) for setup details. Lua-only projects can play inside the editor without a C++ compiler; exporting a project still requires build tools.
+
 Install Python 3 and Visual Studio 2022 or newer with the **Desktop development with C++** workload and **C++ CMake tools for Windows** component. Run these commands from a Developer PowerShell or Developer Command Prompt:
 
 ```powershell
@@ -182,6 +184,27 @@ To install the editor, CLI executable, runtime library, and engine files under `
 ```powershell
 cmake --install build --prefix dist --config Release
 ```
+
+#### Windows (MSYS2 UCRT64, source build)
+
+There is no separate UCRT64 release package. To use GCC for C++ Play, build the editor and engine with the same UCRT64 toolchain used for your scripts. UCRT64 GCC and MSVC C++ binaries are incompatible. Keep the editor, engine DLL, and import library from the same build together.
+
+Install [MSYS2](https://www.msys2.org/), update it with `pacman -Syu` (reopen the terminal and repeat if requested), then run the following in the **MSYS2 UCRT64** terminal from the repository directory:
+
+```bash
+pacman -S --needed git mingw-w64-ucrt-x86_64-toolchain \
+  mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja \
+  mingw-w64-ucrt-x86_64-python
+
+cmake -S . -B build-ucrt64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+cmake --build build-ucrt64 --target doriax-editor doriax-editor-cmd
+./build-ucrt64/doriax-editor.exe
+```
+
+Launch the editor from that terminal so it can find the UCRT64 compiler, `mingw32-make` (included in the toolchain package), and runtime DLLs. Select the UCRT64 GCC kit in **Project Settings > Build**. The editor's own Ninja build and the generated scripts' MinGW Makefiles build can use different generators while sharing the same compiler.
+
+To validate a source build, create a project with a C++ script, press Play, stop, edit the script, and press Play again. Confirm that compilation, linking, and plugin loading succeed. The existing MinGW CI job is not a dedicated UCRT64 Play test, so this source-build path still needs validation on Windows. If an older project retains the previous compiler configuration, close the editor and remove only the project's `.doriax/build` directory before retrying.
 
 #### Optional Vulkan editor
 
