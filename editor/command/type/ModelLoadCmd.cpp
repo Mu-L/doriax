@@ -9,6 +9,7 @@
 #include "subsystem/MeshSystem.h"
 #include "io/FileData.h"
 #include "Backend.h"
+#include <algorithm>
 
 using namespace doriax;
 
@@ -102,7 +103,7 @@ bool editor::ModelLoadCmd::tryLoad(){
     if (ext == "obj"){
         return meshSys->loadOBJ(entity, modelPath, useAsync);
     }
-    return meshSys->loadGLTF(entity, modelPath, useAsync, false, isNewModel);
+    return meshSys->loadGLTF(entity, modelPath, useAsync, reuseHierarchy, isNewModel);
 }
 
 void editor::ModelLoadCmd::finalizeLoad(){
@@ -115,7 +116,9 @@ void editor::ModelLoadCmd::finalizeLoad(){
     std::vector<Entity> newSubEntities;
     ProjectUtils::collectModelEntities(scene, newModel, newSubEntities);
     for (const auto& e : newSubEntities){
-        sceneProject->entities.push_back(e);
+        if (std::find(sceneProject->entities.begin(), sceneProject->entities.end(), e) == sceneProject->entities.end()){
+            sceneProject->entities.push_back(e);
+        }
     }
 
     // Put back on whichever mesh the primitive ended up in, which a merge change moves.
@@ -184,6 +187,10 @@ bool editor::ModelLoadCmd::execute(){
             Log::warn("Cannot merge static model '%s': %s", model.filename.c_str(), reason.c_str());
             return false;
         }
+        if (ProjectUtils::hasCustomMeshParenting(scene, entity)) {
+            Log::warn("Cannot merge static model '%s': reset the mesh parenting first", model.filename.c_str());
+            return false;
+        }
     }
 
     isNewModel = model.filename.empty();
@@ -201,9 +208,16 @@ bool editor::ModelLoadCmd::execute(){
         : false;
     mergeStaticMeshesChanged = model.mergeStaticMeshes != requestedMergeStaticMeshes;
 
+    const bool sameModelFile = MeshSystem::getModelFilenameKey(model.filename) == MeshSystem::getModelFilenameKey(modelPath);
+
+    // Only a reload that would throw away a local arrangement keeps the mesh children and
+    // refreshes their geometry in place. Everything else rebuilds, so node changes still apply.
+    reuseHierarchy = sameModelFile && !mergeStaticMeshesChanged
+        && model.nodesIdMapping.empty() && ProjectUtils::hasCustomMeshParenting(scene, entity);
+
     // A different asset is a fresh import and its own materials win. Reloading the same file keeps
     // the submesh edits, taken now because the meshes holding them are deleted below.
-    if (MeshSystem::getModelFilenameKey(model.filename) == MeshSystem::getModelFilenameKey(modelPath)) {
+    if (sameModelFile) {
         savedSubmeshOverrides = scene->getSystem<MeshSystem>()->collectSubmeshOverrides(entity, model);
     } else {
         for (unsigned int i = 0; i < mesh.numSubmeshes; i++) {
@@ -211,7 +225,10 @@ bool editor::ModelLoadCmd::execute(){
         }
     }
 
-    std::vector<Entity> oldSubEntityRoots = collectModelDeleteRoots(scene, entity, model);
+    std::vector<Entity> oldSubEntityRoots;
+    if (!reuseHierarchy) {
+        oldSubEntityRoots = collectModelDeleteRoots(scene, entity, model);
+    }
     if (!oldSubEntityRoots.empty()) {
         oldSubEntitiesDeleteCmd = new DeleteEntityCmd(project, sceneId, oldSubEntityRoots, true);
         if (!oldSubEntitiesDeleteCmd->execute()) {
@@ -222,13 +239,15 @@ bool editor::ModelLoadCmd::execute(){
     }
 
     // Clear stale model data before loading new model
-    model.skeleton = NULL_ENTITY;
-    model.bonesIdMapping.clear();
-    model.bonesNameMapping.clear();
-    model.animations.clear();
-    model.meshNodesMapping.clear();
-    model.nodesIdMapping.clear();
-    model.skinBindings.clear();
+    if (!reuseHierarchy) {
+        model.skeleton = NULL_ENTITY;
+        model.bonesIdMapping.clear();
+        model.bonesNameMapping.clear();
+        model.animations.clear();
+        model.meshNodesMapping.clear();
+        model.nodesIdMapping.clear();
+        model.skinBindings.clear();
+    }
     model.mergeStaticMeshes = requestedMergeStaticMeshes;
 
     if (tryLoad()){
@@ -268,7 +287,7 @@ void editor::ModelLoadCmd::undo(){
         if (cancelFlag) cancelFlag->store(true);
         scene->getSystem<MeshSystem>()->cancelAsyncModelLoad(entity, modelPath);
         asyncPending = false;
-    } else {
+    } else if (!reuseHierarchy) {
         ModelComponent& model = scene->getComponent<ModelComponent>(entity);
         std::vector<Entity> newSubEntityRoots = collectModelDeleteRoots(scene, entity, model);
         if (!newSubEntityRoots.empty()) {

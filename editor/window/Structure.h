@@ -29,6 +29,7 @@ namespace doriax::editor{
         bool isMainCamera = false;
         bool isBone = false;
         bool isLocked = false;
+        bool canEditModelHierarchy = false;
         bool separator = false;
         bool hasTransform = false;
         bool matchesSearch = false;         // Node matches search term

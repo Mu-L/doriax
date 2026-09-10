@@ -1657,6 +1657,27 @@ int MeshSystem::convertGLTFColorToVec4(const tinygltf::Accessor& accessor, Model
     return static_cast<int>(model.gltfModel->bufferViews.size()) - 1;
 }
 
+bool MeshSystem::canEditModelHierarchy(const ModelComponent& model, std::string* reason) const {
+    auto reject = [reason](const char* message) {
+        if (reason) *reason = message;
+        return false;
+    };
+
+    if (!model.gltfModel || model.needUpdateModel) {
+        return reject("Model data is not loaded yet");
+    }
+    if (model.mergeStaticMeshes || model.meshNodesMapping.empty()) {
+        return reject("The model does not have separate mesh parts");
+    }
+    // A node hierarchy or a skin means the transforms are driven by the model itself
+    if (!model.nodesIdMapping.empty() || !model.gltfModel->skins.empty()) {
+        return reject("Animated and skinned models cannot be reparented");
+    }
+
+    if (reason) reason->clear();
+    return true;
+}
+
 bool MeshSystem::canMergeStaticModel(const ModelComponent& model, const MeshComponent& mesh,
                                      std::string* reason) const {
     auto reject = [reason](const char* message) {

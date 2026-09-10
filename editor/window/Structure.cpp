@@ -117,7 +117,8 @@ std::vector<Entity> editor::Structure::getMovableDraggedEntities(Entity draggedE
             if (sourceTransform->parent == NULL_ENTITY) {
                 continue;
             }
-            if (ProjectUtils::isEntityLocked(scene, sourceEntity)) {
+            if (ProjectUtils::isEntityLocked(scene, sourceEntity)
+                || ProjectUtils::getModelBranchOwner(scene, sourceEntity) != NULL_ENTITY) {
                 return {};
             }
 
@@ -1156,7 +1157,7 @@ void editor::Structure::showTreeNode(editor::TreeNode& node) {
     } else if (!node.isScene && !node.isChildScene && node.isLocked && node.isBundle) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.67f, 0.74f, 0.85f, 0.95f)); // Muted blue-gray for locked bundle entities
         pushedHighlightColor = true;
-    } else if (!node.isScene && !node.isChildScene && node.isLocked) {
+    } else if (!node.isScene && !node.isChildScene && node.isLocked && !node.canEditModelHierarchy) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]); // Use theme's disabled color
         pushedHighlightColor = true;
     } else if (node.isChildScene) {
@@ -1227,7 +1228,11 @@ void editor::Structure::showTreeNode(editor::TreeNode& node) {
                 ImGui::EndTooltip();
             }
         } else {
-            ImGui::SetItemTooltip("Entity: %u", node.id);
+            if (node.canEditModelHierarchy) {
+                ImGui::SetItemTooltip("Entity: %u\nDrag to organize the parts of this model", node.id);
+            } else {
+                ImGui::SetItemTooltip("Entity: %u", node.id);
+            }
         }
     }
 
@@ -1609,6 +1614,24 @@ void editor::Structure::showTreeNode(editor::TreeNode& node) {
                         std::string mergeReason;
                         bool canChangeMerge = restoreHierarchy ||
                             selectedScene->scene->getSystem<MeshSystem>()->canMergeStaticModel(*model, *mesh, &mergeReason);
+                        bool canEditHierarchy = ProjectUtils::hasCustomMeshParenting(selectedScene->scene, node.id) &&
+                            selectedScene->scene->getSystem<MeshSystem>()->canEditModelHierarchy(*model);
+                        if (!restoreHierarchy && canEditHierarchy) {
+                            canChangeMerge = false;
+                            mergeReason = "Reset the mesh parenting before merging this model";
+                        }
+
+                        if (ImGui::MenuItem(ICON_FA_SITEMAP "  Reset mesh parenting", nullptr, false, !node.isLocked && canEditHierarchy)) {
+                            MultiPropertyCmd* resetCmd = new MultiPropertyCmd();
+                            for (const auto& meshNode : model->meshNodesMapping) {
+                                if (selectedScene->scene->getComponent<Transform>(meshNode.second).parent != node.id) {
+                                    resetCmd->addCommand(std::make_unique<MoveEntityOrderCmd>(
+                                        project, selectedScene->id, meshNode.second, node.id, InsertionType::INTO));
+                                }
+                            }
+                            CommandHandle::get(selectedScene->id)->addCommandNoMerge(resetCmd);
+                        }
+
                         bool mergeEnabled = !node.isLocked && canChangeMerge;
                         const char* mergeLabel = restoreHierarchy
                             ? ICON_FA_OBJECT_GROUP "  Restore model mesh children"
@@ -2161,7 +2184,9 @@ void editor::Structure::rebuildEntityTree(SceneProject* sceneProject, TreeNode& 
             child.isMainCamera = (entity == mainCamera);
             child.isBone = signature.test(sceneProject->scene->getComponentId<BoneComponent>());
             child.hasTransform = true;
-            child.isLocked = ProjectUtils::isEntityLocked(sceneProject->scene, entity);
+            child.isLocked = ProjectUtils::isEntityLocked(sceneProject->scene, entity)
+                || ProjectUtils::getModelBranchOwner(sceneProject->scene, entity) != NULL_ENTITY;
+            child.canEditModelHierarchy = ProjectUtils::canEditModelBranch(sceneProject->scene, entity);
             child.order = order++;
             child.name = sceneProject->scene->getEntityName(entity);
             auto bundleIt = bundleEntityPaths.find(entity);

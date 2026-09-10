@@ -399,6 +399,14 @@ bool editor::DeleteEntityCmd::execute(){
                 || std::find(entitiesToDelete.begin(), entitiesToDelete.end(), lockedParent) != entitiesToDelete.end();
         }
 
+        // Imported parts and the groups holding them only go away with their own model
+        if (canDelete && !allowLockedRoots){
+            Entity modelOwner = ProjectUtils::getModelBranchOwner(sceneProject->scene, it->entity);
+            canDelete = modelOwner == NULL_ENTITY
+                || isRequestedEntity(modelOwner)
+                || std::find(entitiesToDelete.begin(), entitiesToDelete.end(), modelOwner) != entitiesToDelete.end();
+        }
+
         if (!canDelete){
              Out::warning("Cannot delete entity '%u'. It is a locked child of another component.", it->entity);
              it = entities.erase(it);

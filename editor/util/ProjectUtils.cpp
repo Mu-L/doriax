@@ -404,6 +404,64 @@ bool editor::ProjectUtils::hasModelMeshChildrenWithoutRootGeometry(EntityRegistr
     return false;
 }
 
+Entity editor::ProjectUtils::getParentModel(Scene* scene, Entity entity) {
+    Transform* transform = scene->findComponent<Transform>(entity);
+
+    while (transform && transform->parent != NULL_ENTITY) {
+        if (scene->findComponent<ModelComponent>(transform->parent)) {
+            return transform->parent;
+        }
+        transform = scene->findComponent<Transform>(transform->parent);
+    }
+
+    return NULL_ENTITY;
+}
+
+Entity editor::ProjectUtils::getModelBranchOwner(Scene* scene, Entity entity) {
+    Entity owner = scene->findComponent<ModelComponent>(entity) ? NULL_ENTITY : getParentModel(scene, entity);
+    if (owner == NULL_ENTITY) {
+        return NULL_ENTITY;
+    }
+
+    const ModelComponent& model = scene->getComponent<ModelComponent>(owner);
+    for (const auto& node : model.meshNodesMapping) {
+        if (node.second == entity) {
+            return owner;
+        }
+    }
+
+    // A local group answers to the model only while it holds imported parts
+    for (const auto& node : model.meshNodesMapping) {
+        if (scene->isParentOf(entity, node.second)) {
+            return owner;
+        }
+    }
+
+    return NULL_ENTITY;
+}
+
+bool editor::ProjectUtils::canEditModelBranch(Scene* scene, Entity entity, std::string* reason) {
+    if (reason) reason->clear();
+
+    Entity owner = getModelBranchOwner(scene, entity);
+    if (owner == NULL_ENTITY) {
+        return false;
+    }
+
+    return scene->getSystem<MeshSystem>()->canEditModelHierarchy(scene->getComponent<ModelComponent>(owner), reason);
+}
+
+bool editor::ProjectUtils::hasCustomMeshParenting(Scene* scene, Entity model) {
+    for (const auto& node : scene->getComponent<ModelComponent>(model).meshNodesMapping) {
+        Transform* transform = scene->findComponent<Transform>(node.second);
+        if (transform && transform->parent != model) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 Entity editor::ProjectUtils::getLockedEntityParent(Scene* scene, Entity entity){
     if (entity == NULL_ENTITY)
         return NULL_ENTITY;
@@ -541,16 +599,40 @@ Entity editor::ProjectUtils::getEffectiveParent(Scene* scene, Entity entity) {
     return getLockedEntityParent(scene, entity);
 }
 
-bool editor::ProjectUtils::canMoveLockedEntityOrder(Scene* scene, Entity source, Entity target, InsertionType type) {
+bool editor::ProjectUtils::canMoveLockedEntityOrder(Scene* scene, Entity source, Entity target, InsertionType type, std::string* reason) {
+    auto reject = [reason](const char* message) {
+        if (reason) *reason = message;
+        return false;
+    };
+
+    if (reason) reason->clear();
+
+    Entity parent = (type == InsertionType::INTO) ? target : getEffectiveParent(scene, target);
+
+    Entity owner = getModelBranchOwner(scene, source);
+    if (owner != NULL_ENTITY) {
+        // The nearest model at or above the destination, so parts cannot escape through a
+        // local group nor land inside a nested model
+        Entity destination = scene->findComponent<ModelComponent>(parent) ? parent : getParentModel(scene, parent);
+        if (destination != owner) {
+            return reject("Imported parts must stay inside their own model");
+        }
+        if (parent != getEffectiveParent(scene, source) && !canEditModelBranch(scene, source, reason)) {
+            return false;
+        }
+
+        return true;
+    }
+
     if (!isEntityLocked(scene, source)) {
         return true;
     }
 
-    if (type == InsertionType::INTO) {
-        return false;
+    if (type != InsertionType::INTO && getEffectiveParent(scene, source) == getEffectiveParent(scene, target)) {
+        return true;
     }
 
-    return getEffectiveParent(scene, source) == getEffectiveParent(scene, target);
+    return reject("Generated entities can only be reordered within the same parent");
 }
 
 std::string editor::ProjectUtils::makeUniqueEntityName(const std::string& baseName, const std::unordered_set<std::string>& existingNames) {

@@ -21,8 +21,9 @@ editor::MoveEntityOrderCmd::MoveEntityOrderCmd(Project* project, uint32_t sceneI
 bool editor::MoveEntityOrderCmd::execute(){
     SceneProject* sceneProject = project->getScene(sceneId);
 
-    if (!ProjectUtils::canMoveLockedEntityOrder(sceneProject->scene, source, target, type)){
-        editor::Out::warning("Cannot move entity '%u'. Locked entities can only be reordered within the same parent or virtual parent.", source);
+    std::string reason;
+    if (!ProjectUtils::canMoveLockedEntityOrder(sceneProject->scene, source, target, type, &reason)){
+        editor::Out::warning("Cannot move entity '%u': %s", source, reason.c_str());
         return false;
     }
 

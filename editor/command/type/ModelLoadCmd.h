@@ -37,6 +37,7 @@ namespace doriax::editor{
 
         bool wasModified;
         bool isNewModel = false;
+        bool reuseHierarchy = false;
         bool asyncPending = false;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
 

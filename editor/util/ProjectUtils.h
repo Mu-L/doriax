@@ -29,8 +29,13 @@ public:
 
     static Entity getLockedEntityParent(Scene* scene, Entity entity);
     static bool isEntityLocked(Scene* scene, Entity entity);
+    static Entity getParentModel(Scene* scene, Entity entity);
+    // Model owning the imported parts an entity is or contains, never a model itself
+    static Entity getModelBranchOwner(Scene* scene, Entity entity);
+    static bool canEditModelBranch(Scene* scene, Entity entity, std::string* reason = nullptr);
+    static bool hasCustomMeshParenting(Scene* scene, Entity model);
     static Entity getEffectiveParent(Scene* scene, Entity entity);
-    static bool canMoveLockedEntityOrder(Scene* scene, Entity source, Entity target, InsertionType type);
+    static bool canMoveLockedEntityOrder(Scene* scene, Entity source, Entity target, InsertionType type, std::string* reason = nullptr);
     static std::string makeUniqueEntityName(const std::string& baseName, const std::unordered_set<std::string>& existingNames);
     static std::string makeUniqueEntityName(Scene* scene, const std::vector<Entity>& entities, const std::string& baseName, const std::unordered_set<Entity>& ignoredEntities = {});
 

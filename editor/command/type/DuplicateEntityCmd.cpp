@@ -36,6 +36,13 @@ bool editor::DuplicateEntityCmd::execute(){
         return false;
     }
 
+    for (Entity entity : topLevel){
+        if (ProjectUtils::getModelBranchOwner(scene, entity) != NULL_ENTITY){
+            Out::warning("Cannot duplicate entity '%u'. Duplicate the whole model instead.", entity);
+            return false;
+        }
+    }
+
     // Record parents of source entities
     std::vector<Entity> sourceParents;
     for (Entity entity : topLevel) {
