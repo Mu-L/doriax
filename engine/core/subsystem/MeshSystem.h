@@ -118,6 +118,8 @@ namespace doriax{
         Matrix4 getGLTFMeshGlobalMatrix(int nodeIndex, ModelComponent& model, std::map<int, int>& nodesParent);
         Matrix4 getGLTFInverseBindMatrix(const ModelComponent& model, int skinIndex, size_t jointIndex);
         bool buildGLTFNodeHierarchy(Entity entity, ModelComponent& model, const std::map<int, int>& nodesParent);
+        // Children left without a node stay in the scene, dropped from the mapping
+        void remapMeshNodesByName(ModelComponent& model, const std::vector<int>& meshNodes);
         void buildGLTFSkinBindings(Entity entity, ModelComponent& model);
         Entity generateSketetalStructure(Entity entity, ModelComponent& model, int nodeIndex, int skinIndex);
         TextureFilter convertFilter(int filter);

@@ -1657,6 +1657,49 @@ int MeshSystem::convertGLTFColorToVec4(const tinygltf::Accessor& accessor, Model
     return static_cast<int>(model.gltfModel->bufferViews.size()) - 1;
 }
 
+void MeshSystem::remapMeshNodesByName(ModelComponent& model, const std::vector<int>& meshNodes) {
+    std::map<int, Entity> previous;
+    for (const auto& node : model.meshNodesMapping) {
+        if (scene->getSignature(node.second).test(scene->getComponentId<MeshComponent>())) {
+            previous.insert(node);
+        }
+    }
+    model.meshNodesMapping.clear();
+
+    auto claim = [&](int nodeIdx, std::map<int, Entity>::iterator entry) {
+        model.meshNodesMapping[nodeIdx] = entry->second;
+        previous.erase(entry);
+    };
+
+    // Same index and name first, so an unchanged file keeps every pairing it had
+    std::vector<int> unpaired;
+    for (int nodeIdx : meshNodes) {
+        auto sameIndex = previous.find(nodeIdx);
+        if (sameIndex != previous.end() && scene->getEntityName(sameIndex->second) == model.gltfModel->nodes[nodeIdx].name) {
+            claim(nodeIdx, sameIndex);
+        } else {
+            unpaired.push_back(nodeIdx);
+        }
+    }
+
+    for (int nodeIdx : unpaired) {
+        const std::string& nodeName = model.gltfModel->nodes[nodeIdx].name;
+        auto match = previous.end();
+        if (!nodeName.empty()) {
+            match = std::find_if(previous.begin(), previous.end(), [&](const auto& entry) {
+                return scene->getEntityName(entry.second) == nodeName;
+            });
+        }
+        // Nodes without a name, and parts the user renamed, have only the index left
+        if (match == previous.end()) {
+            match = previous.find(nodeIdx);
+        }
+        if (match != previous.end()) {
+            claim(nodeIdx, match);
+        }
+    }
+}
+
 bool MeshSystem::canEditModelHierarchy(const ModelComponent& model, std::string* reason) const {
     auto reject = [reason](const char* message) {
         if (reason) *reason = message;
@@ -4229,6 +4272,12 @@ bool MeshSystem::loadGLTF(Entity entity, const std::string filename, bool asyncL
             model.gltfModel->buffers.reserve(model.gltfModel->buffers.size() + mesh.numSubmeshes * synthPerSubmesh);
             model.gltfModel->bufferViews.reserve(model.gltfModel->bufferViews.size() + mesh.numSubmeshes * synthPerSubmesh);
         }
+    }
+
+    // A reload can hit a file whose nodes moved, so pair the children by name before the
+    // index-keyed lookup below sends them to another node's geometry.
+    if (skipEntities && useChildEntities && model.nodesIdMapping.empty()) {
+        remapMeshNodesByName(model, meshNodes);
     }
 
     // Creating node meshes may reallocate the MeshComponent array. Do it only after the root mesh

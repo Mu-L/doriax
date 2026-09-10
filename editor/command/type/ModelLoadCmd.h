@@ -41,12 +41,16 @@ namespace doriax::editor{
         bool asyncPending = false;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
 
+        // Mesh children the reload keeps, so undo only removes the ones it created
+        std::vector<Entity> reusedEntities;
+
         // The generated mesh entities are destroyed before the load, so their submesh edits are
         // taken aside here. Empty when the asset itself changed.
         MeshSystem::SubmeshOverrides savedSubmeshOverrides;
 
         static std::vector<Entity> collectModelDeleteRoots(Scene* scene, Entity modelEntity,
                                                            const ModelComponent& model);
+        static bool isMappedMeshNode(const ModelComponent& model, Entity entity);
 
         bool tryLoad();
         void finalizeLoad();

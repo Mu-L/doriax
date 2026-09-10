@@ -95,6 +95,15 @@ std::vector<Entity> editor::ModelLoadCmd::collectModelDeleteRoots(Scene* scene, 
     return roots;
 }
 
+bool editor::ModelLoadCmd::isMappedMeshNode(const ModelComponent& model, Entity entity) {
+    for (const auto& node : model.meshNodesMapping) {
+        if (node.second == entity) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool editor::ModelLoadCmd::tryLoad(){
     Scene* scene = project->getScene(sceneId)->scene;
     std::shared_ptr<MeshSystem> meshSys = scene->getSystem<MeshSystem>();
@@ -118,6 +127,13 @@ void editor::ModelLoadCmd::finalizeLoad(){
     for (const auto& e : newSubEntities){
         if (std::find(sceneProject->entities.begin(), sceneProject->entities.end(), e) == sceneProject->entities.end()){
             sceneProject->entities.push_back(e);
+        }
+    }
+
+    for (Entity reused : reusedEntities) {
+        if (!isMappedMeshNode(newModel, reused)) {
+            Log::warn("Mesh part '%s' is no longer in '%s' and became a plain entity",
+                scene->getEntityName(reused).c_str(), newModel.filename.c_str());
         }
     }
 
@@ -215,11 +231,19 @@ bool editor::ModelLoadCmd::execute(){
     reuseHierarchy = sameModelFile && !mergeStaticMeshesChanged
         && model.nodesIdMapping.empty() && ProjectUtils::hasCustomMeshParenting(scene, entity);
 
+    reusedEntities.clear();
+    if (reuseHierarchy) {
+        for (const auto& node : model.meshNodesMapping) {
+            reusedEntities.push_back(node.second);
+        }
+    }
+
     // A different asset is a fresh import and its own materials win. Reloading the same file keeps
-    // the submesh edits, taken now because the meshes holding them are deleted below.
-    if (sameModelFile) {
+    // the submesh edits, taken now because the meshes holding them are deleted below. A reuse keeps
+    // those meshes, so the loader restores them and these ordinals would be the pre-remap ones.
+    if (sameModelFile && !reuseHierarchy) {
         savedSubmeshOverrides = scene->getSystem<MeshSystem>()->collectSubmeshOverrides(entity, model);
-    } else {
+    } else if (!sameModelFile) {
         for (unsigned int i = 0; i < mesh.numSubmeshes; i++) {
             mesh.submeshes[i].overrideFields = 0;
         }
@@ -287,9 +311,16 @@ void editor::ModelLoadCmd::undo(){
         if (cancelFlag) cancelFlag->store(true);
         scene->getSystem<MeshSystem>()->cancelAsyncModelLoad(entity, modelPath);
         asyncPending = false;
-    } else if (!reuseHierarchy) {
+    } else {
         ModelComponent& model = scene->getComponent<ModelComponent>(entity);
         std::vector<Entity> newSubEntityRoots = collectModelDeleteRoots(scene, entity, model);
+        if (reuseHierarchy) {
+            // The kept children stay, so only the nodes this load added are removed
+            newSubEntityRoots.erase(std::remove_if(newSubEntityRoots.begin(), newSubEntityRoots.end(),
+                [this](Entity root) {
+                    return std::find(reusedEntities.begin(), reusedEntities.end(), root) != reusedEntities.end();
+                }), newSubEntityRoots.end());
+        }
         if (!newSubEntityRoots.empty()) {
             DeleteEntityCmd newSubEntitiesDeleteCmd(project, sceneId, newSubEntityRoots, true);
             newSubEntitiesDeleteCmd.execute();
