@@ -3,6 +3,7 @@
 
 #include "Stream.h"
 #include "AppSettings.h"
+#include "EditorHost.h"
 
 #include "Base64.h"
 #include "Catalog.h"
@@ -3217,6 +3218,8 @@ ScriptProperty editor::Stream::decodeScriptProperty(const YAML::Node& node) {
 }
 
 std::vector<Entity> editor::Stream::decodeEntity(const YAML::Node& entityNode, EntityRegistry* registry, std::vector<Entity>* entities, Project* project, SceneProject* sceneProject, Entity parent, bool createNewIfExists, bool removeMissingComponents, std::unordered_map<Entity, Entity>* entityRemap) {
+    editor::getEditorHost().reportStartupProgress();
+
     std::vector<Entity> allEntities;
 
     if (!entityNode || !entityNode.IsMap() || !entityNode["type"]) {

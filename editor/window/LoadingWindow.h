@@ -4,12 +4,16 @@
 #pragma once
 
 #include "thread/ResourceProgress.h"
+#include "texture/Texture.h"
+#include <string>
 
 namespace doriax::editor {
 
     class LoadingWindow {
     private:
         bool wasShowing = false;
+        bool logoLoaded = false;
+        Texture logo;
 
     public:
         LoadingWindow();
@@ -18,6 +22,7 @@ namespace doriax::editor {
         void show();
 
     private:
+        void drawStartupOverlay(const std::string& status);
         void drawProgressModal(const OverallBuildProgress& progress);
     };
 

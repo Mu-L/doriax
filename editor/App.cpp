@@ -6,6 +6,8 @@
 #include "imgui_internal.h"
 #include "Platform.h"
 #include "Backend.h"
+#include "Engine.h"
+#include "render/SystemRender.h"
 
 #include "external/IconsFontAwesome6.h"
 #include "command/CommandHandle.h"
@@ -433,6 +435,8 @@ editor::PlatformMenuModel editor::App::buildMenuModel(){
 }
 
 void editor::App::executeMenuCommand(const PlatformMenuCommand& command){
+    if (startupLoading) return;
+
     const auto action = static_cast<AppMenuCommand>(command.id);
     switch (action) {
         case AppMenuCommand::NewProject: {
@@ -1521,6 +1525,11 @@ void editor::App::show(){
     }
     Theme::applyDpiScale(dpiScale);
 
+    if (startupLoading) {
+        loadingWindow->show();
+        return;
+    }
+
     if (!ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
         if (resourcesWindow->isFocused()) {
             lastFocusedWindow = LastFocusedWindow::Resources;
@@ -1681,24 +1690,35 @@ void editor::App::show(){
     persistPanelVisibilitySettings();
 }
 
-void editor::App::engineInit(int argc, char** argv) {
-    Engine::systemInit(argc, argv, new editor::Platform(&project));
+void editor::App::setStartupPump(std::function<void(bool)> pump) {
+    startupPump = std::move(pump);
+}
 
-    // Check if there's a last opened project
-    std::filesystem::path lastProjectPath = AppSettings::getLastProjectPath();
+void editor::App::reportStartupProgress(const std::string& status) {
+    if (!isMainThread() || !startupLoading || pumpingStartup) return;
+    if (!status.empty()) startupStatus = status;
+    if (!startupPump) return;
 
-    if (!lastProjectPath.empty() && std::filesystem::exists(lastProjectPath)) {
-        // Try to load the last project
-        if (project.loadProject(lastProjectPath)) {
-            Out::info("Loaded last opened project: \"%s\"", lastProjectPath.string().c_str());
-        } else {
-            // If loading fails, create a new temp project
-            project.createTempProject("MyDoriaxProject");
-        }
-    } else {
-        // No last project, create a new temp project
-        project.createTempProject("MyDoriaxProject");
+    const auto now = std::chrono::steady_clock::now();
+    if (lastStartupFrame.time_since_epoch().count() != 0 &&
+        now - lastStartupFrame < std::chrono::milliseconds(33)) return;
+    lastStartupFrame = now;
+
+    // Project loading stays on the main thread. Pump only native events and the
+    // loading UI here; editor tasks must wait until the project is complete.
+    pumpingStartup = true;
+    try {
+        startupPump(Engine::isViewLoaded());
+    } catch (...) {
+        pumpingStartup = false;
+        throw;
     }
+    pumpingStartup = false;
+}
+
+void editor::App::engineInit(int argc, char** argv) {
+    reportStartupProgress("Initializing engine...");
+    Engine::systemInit(argc, argv, new editor::Platform(&project));
 
     Engine::pauseGameEvents(true);
 
@@ -1722,10 +1742,37 @@ void editor::App::engineInit(int argc, char** argv) {
 }
 
 void editor::App::engineViewLoaded(){
+    reportStartupProgress("Initializing graphics...");
     Engine::systemViewLoaded();
 }
 
+void editor::App::loadStartupProject() {
+    lastStartupFrame = {};
+    reportStartupProgress("Loading project...");
+
+    std::filesystem::path lastProjectPath = AppSettings::getLastProjectPath();
+
+    if (!lastProjectPath.empty() && std::filesystem::exists(lastProjectPath)) {
+        if (project.loadProject(lastProjectPath)) {
+            Out::info("Loaded last opened project: \"%s\"", lastProjectPath.string().c_str());
+        } else {
+            project.createTempProject("MyDoriaxProject");
+        }
+    } else {
+        project.createTempProject("MyDoriaxProject");
+    }
+
+    startupLoading = false;
+    startupPump = nullptr;
+    requestRedraw();
+}
+
 void editor::App::engineRender(){
+    if (startupLoading) {
+        SystemRender::executeQueue();
+        return;
+    }
+
     processMainThreadTasks();
     project.refreshLinkedMaterials();
     renderedSceneThisFrame = false;
@@ -1952,6 +1999,9 @@ void editor::App::shutdownBackgroundWork() {
 
 void editor::App::engineViewDestroyed(){
     imageViewerWindow->closeAll();
+    // Closing during startup can leave uploads committed before any scene frame
+    // consumes them. Drain that batch before shutdown waits to flush the queue.
+    SystemRender::executeQueue();
     Engine::systemViewDestroyed();
 }
 
@@ -2427,6 +2477,8 @@ void editor::App::processNextSaveDialog() {
 }
 
 void editor::App::processMainThreadTasks() {
+    if (startupLoading) return;
+
     std::queue<std::function<void()>> tasks;
     {
         std::lock_guard<std::mutex> lock(mainThreadTaskMutex);
@@ -2507,6 +2559,11 @@ void editor::App::saveWindowSettings(int width, int height, bool maximized, floa
 }
 
 void editor::App::exit() {
+    if (startupLoading) {
+        Backend::closeWindow();
+        return;
+    }
+
     // Check if any modal popup is currently open (including ComponentAddDialog, ScriptCreateDialog, etc.)
     ImGuiWindow* modal = ImGui::GetTopMostAndVisiblePopupModal();
     if (modal != nullptr) {

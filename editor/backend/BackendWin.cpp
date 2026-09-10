@@ -93,6 +93,7 @@ struct WinBackendData {
     std::function<void()> liveResizeFrame;
     void (*createImGuiWindow)(ImGuiViewport*) = nullptr;
     NativeMenu menu;
+    bool nativeLoadingPaint = true;
 
     GamepadWin gamepads;
     std::unique_ptr<editor::Renderer> renderer;
@@ -340,6 +341,29 @@ void handleDrop(HDROP drop) {
     if (!paths.empty()) editor::Backend::getApp().handleExternalDrop(paths);
 }
 
+void paintNativeLoading(HWND window, HDC deviceContext) {
+    RECT client{};
+    GetClientRect(window, &client);
+    const HBRUSH brush = CreateSolidBrush(RGB(41, 38, 36));
+    FillRect(deviceContext, &client, brush);
+    DeleteObject(brush);
+
+    SetBkMode(deviceContext, TRANSPARENT);
+    SetTextColor(deviceContext, RGB(191, 186, 186));
+    const int fontHeight = -MulDiv(20, GetDeviceCaps(deviceContext, LOGPIXELSY), 72);
+    HFONT font = CreateFontW(
+        fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_SANS_SERIF, L"Segoe UI");
+    HGDIOBJ previousFont = font ? SelectObject(deviceContext, font) : nullptr;
+    DrawTextW(deviceContext, L"Loading Doriax Engine...", -1, &client,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (font) {
+        SelectObject(deviceContext, previousFont);
+        DeleteObject(font);
+    }
+}
+
 LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
     if (backend) {
         switch (message) {
@@ -448,7 +472,9 @@ LRESULT CALLBACK windowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
                 return 1;
             case WM_PAINT: {
                 PAINTSTRUCT paint{};
-                BeginPaint(window, &paint);
+                HDC deviceContext = BeginPaint(window, &paint);
+                if (backend->nativeLoadingPaint)
+                    paintNativeLoading(window, deviceContext);
                 EndPaint(window, &paint);
                 backend->redrawRequested = true;
                 return 0;
@@ -774,6 +800,7 @@ int editor::Backend::init(int argc, char* argv[]) {
         shutdownWindow();
         return -1;
     }
+    processMessages(false);
 
     if (NFD_Init() != NFD_OKAY) {
         std::fprintf(stderr, "Error: NFD_Init failed: %s\n", NFD_GetError());
@@ -795,6 +822,7 @@ int editor::Backend::init(int argc, char* argv[]) {
     installViewportHooks(platformIO);
 
     app.setup();
+    processMessages(false);
     int clientWidth = 0;
     int clientHeight = 0;
     WindowWin::getClientSize(clientWidth, clientHeight);
@@ -808,23 +836,15 @@ int editor::Backend::init(int argc, char* argv[]) {
         shutdownWindow();
         return -1;
     }
+    processMessages(false);
 
     backend->editorFrame.init(*backend->renderer, app, []() {
         ImGui_ImplWin32_NewFrame();
         applyRelativeMouseData();
     });
 
-    app.engineInit(argc, argv);
-    // Keep the initial hide soft so ImGui can restore the normal editor cursor.
-    SetCursor(nullptr);
-    app.engineViewLoaded();
-
-    app.setWakeCallback([]() {
-        if (backend && backend->window)
-            PostMessageW(backend->window, WM_DORIAX_WAKE, 0, 0);
-    });
-
     bool frameInProgress = false;
+    bool engineStarted = false;
 
     auto renderFrame = [&](bool forceRedraw) {
         if (frameInProgress || backend->shouldClose) return;
@@ -840,8 +860,35 @@ int editor::Backend::init(int argc, char* argv[]) {
         WindowWin::getClientSize(state.width, state.height);
         if (!backend->editorFrame.run(state))
             backend->shouldClose = true;
+        if (!state.minimized)
+            backend->nativeLoadingPaint = false;
         frameInProgress = false;
     };
+
+    app.setStartupPump([&](bool render) {
+        processMessages(false);
+        if (render && !backend->shouldClose)
+            renderFrame(true);
+    });
+
+    if (!backend->shouldClose) {
+        app.engineInit(argc, argv);
+        engineStarted = true;
+        // Keep the initial hide soft so ImGui can restore the normal editor cursor.
+        SetCursor(nullptr);
+    }
+    bool engineViewReady = false;
+    if (engineStarted && !backend->shouldClose) {
+        app.engineViewLoaded();
+        engineViewReady = true;
+    }
+    if (engineStarted && !backend->shouldClose)
+        app.loadStartupProject();
+
+    app.setWakeCallback([]() {
+        if (backend && backend->window)
+            PostMessageW(backend->window, WM_DORIAX_WAKE, 0, 0);
+    });
 
     backend->liveResizeFrame = [&]() { renderFrame(true); };
     while (!backend->shouldClose) {
@@ -863,11 +910,13 @@ int editor::Backend::init(int argc, char* argv[]) {
     backend->renderer->shutdownImGui();
     ImGui_ImplWin32_Shutdown();
     ImGui::DestroyContext();
-    app.engineViewDestroyed();
+    if (engineViewReady)
+        app.engineViewDestroyed();
     NFD_Quit();
     backend->renderer.reset();
     shutdownWindow();
-    app.engineShutdown();
+    if (engineStarted)
+        app.engineShutdown();
     return 0;
 }
 

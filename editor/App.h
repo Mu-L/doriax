@@ -33,6 +33,8 @@
 
 #include "render/SceneRender.h"
 
+#include <chrono>
+#include <functional>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -82,6 +84,13 @@ namespace doriax::editor{
 
         bool redrawRequested = false;
         bool frameRequested = false;
+
+        // True until the first project is loaded and the editor UI can be shown.
+        bool startupLoading = true;
+        bool pumpingStartup = false;
+        std::string startupStatus = "Starting...";
+        std::function<void(bool)> startupPump;
+        std::chrono::steady_clock::time_point lastStartupFrame{};
 
         // Footer stats, sampled only from consecutive drawn frames (see engineRender).
         bool renderedScenePrevFrame = false;
@@ -201,9 +210,15 @@ namespace doriax::editor{
 
         void engineInit(int argc, char** argv);
         void engineViewLoaded();
+        void loadStartupProject();
         void engineRender();
         void engineViewDestroyed();
         void engineShutdown();
+
+        bool isStartupLoading() const { return startupLoading; }
+        const std::string& getStartupStatus() const { return startupStatus; }
+        void setStartupPump(std::function<void(bool render)> pump);
+        void reportStartupProgress(const std::string& status = {}) override;
 
         void addNewSceneToDock(uint32_t sceneId) override;
         void addNewCodeWindowToDock(fs::path path, bool force = false);

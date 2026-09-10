@@ -3,8 +3,11 @@
 
 #include "LoadingWindow.h"
 #include "Backend.h"
+#include "Theme.h"
+#include "resources/icons/doriax-logo_png.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include <algorithm>
 #include <vector>
 
 using namespace doriax::editor;
@@ -16,11 +19,17 @@ LoadingWindow::~LoadingWindow() {
 }
 
 void LoadingWindow::show() {
+    App& app = Backend::getApp();
+    if (app.isStartupLoading()) {
+        drawStartupOverlay(app.getStartupStatus());
+        return;
+    }
+
     bool hasBuilds = ResourceProgress::hasActiveBuilds();
 
     // Build progress comes from worker threads, so nothing else keeps the loop awake
     if (hasBuilds) {
-        Backend::getApp().requestRedraw();
+        app.requestRedraw();
     }
 
     bool dragDropActive = ImGui::IsDragDropActive();
@@ -41,6 +50,70 @@ void LoadingWindow::show() {
     }
 }
 
+void LoadingWindow::drawStartupOverlay(const std::string& status) {
+    if (!logoLoaded) {
+        TextureData data;
+        data.loadTextureFromMemory(doriax_logo_png, doriax_logo_png_len);
+        logo.setData("editor:loading:logo", data);
+        logo.load();
+        logoLoaded = true;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoInputs;
+
+    if (ImGui::Begin("##StartupLoading", nullptr, flags)) {
+        const ImVec2 windowSize = ImGui::GetWindowSize();
+        const float barWidth = std::min(Theme::dpi(360.0f), windowSize.x);
+        const float barHeight = Theme::dpi(6.0f);
+
+        TextureRender* logoRender = logo.getRender();
+        const float logoWidth = std::min(Theme::dpi(150.0f), windowSize.x);
+        const float logoHeight = logo.getWidth() > 0
+            ? logoWidth * logo.getHeight() / logo.getWidth() : 0.0f;
+        const char* statusText = status.empty() ? "Loading..." : status.c_str();
+        const ImVec2 statusSize = ImGui::CalcTextSize(statusText);
+
+        const float contentHeight = logoHeight + Theme::dpi(12.0f) + statusSize.y + Theme::dpi(18.0f) + barHeight;
+        ImGui::SetCursorPos(ImVec2(
+            (windowSize.x - logoWidth) * 0.5f,
+            (windowSize.y - contentHeight) * 0.45f));
+        if (logoRender && logoRender->isCreated()) {
+            ImGui::Image(Backend::getImGuiTexture(logoRender), ImVec2(logoWidth, logoHeight));
+        } else {
+            ImGui::Dummy(ImVec2(logoWidth, logoHeight));
+        }
+
+        ImGui::Dummy(ImVec2(0.0f, Theme::dpi(8.0f)));
+        ImGui::SetCursorPosX((windowSize.x - statusSize.x) * 0.5f);
+        ImGui::PushStyleColor(ImGuiCol_Text, Theme::Colors::SubtleText);
+        ImGui::TextUnformatted(statusText);
+        ImGui::PopStyleColor();
+
+        ImGui::Dummy(ImVec2(0.0f, Theme::dpi(16.0f)));
+        ImGui::SetCursorPosX((windowSize.x - barWidth) * 0.5f);
+
+        ImGui::ProgressBar(-static_cast<float>(ImGui::GetTime()),
+                           ImVec2(barWidth, barHeight), "");
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+}
+
 void LoadingWindow::drawProgressModal(const OverallBuildProgress& progress) {
     // Center the modal
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
@@ -50,7 +123,7 @@ void LoadingWindow::drawProgressModal(const OverallBuildProgress& progress) {
     // Set transparency
     ImGui::SetNextWindowBgAlpha(0.85f);
 
-    ImGuiWindowFlags flags = ImGuiWindowFlags_Modal | 
+    ImGuiWindowFlags flags = ImGuiWindowFlags_Modal |
                             ImGuiWindowFlags_NoResize |
                             ImGuiWindowFlags_NoMove |
                             ImGuiWindowFlags_NoCollapse |
@@ -69,7 +142,7 @@ void LoadingWindow::drawProgressModal(const OverallBuildProgress& progress) {
 
                 for (const auto& build : allBuilds) {
                     ImGui::Bullet();
-                    ImGui::Text("%s - %s - %.1f%%", 
+                    ImGui::Text("%s - %s - %.1f%%",
                         ResourceProgress::getResourceTypeName(build.type).c_str(),
                         build.name.c_str(),
                         build.progress * 100.0f);

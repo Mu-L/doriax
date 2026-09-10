@@ -981,6 +981,14 @@ NativeWindow* createNativeWindow(int x, int y, int width, int height,
     }
 
     XSetWMProtocols(backend->display, result->handle, &backend->wmDelete, 1);
+    XColor background{};
+    background.red = 41 * 257;
+    background.green = 38 * 257;
+    background.blue = 36 * 257;
+    background.flags = DoRed | DoGreen | DoBlue;
+    if (XAllocColor(backend->display, result->colormap, &background)) {
+        XSetWindowBackground(backend->display, result->handle, background.pixel);
+    }
     setDecorated(result, decorated);
     configureXdnd(result);
 
@@ -2784,6 +2792,7 @@ int editor::Backend::init(int argc, char* argv[]) {
     initImGuiPlatform();
 
     app.setup();
+    processEvents(0.0);
     backend->renderer = std::make_unique<editor::Renderer>();
     if (!backend->renderer->init(
             rendererPlatform(), backend->mainWindow->width,
@@ -2798,13 +2807,43 @@ int editor::Backend::init(int argc, char* argv[]) {
 
     backend->editorFrame.init(*backend->renderer, app, newImGuiFrame);
 
-    app.engineInit(argc, argv);
-    // Match GLFW/SDL soft hide at startup: keep the OS cursor manageable by
-    // ImGui. hideEditorCursor() sets NoMouseCursorChange and would leave the
-    // pointer permanently invisible in NORMAL edit mode.
-    XDefineCursor(backend->display, backend->mainWindow->handle,
-                  WindowLinux::invisibleCursor());
-    app.engineViewLoaded();
+    auto renderFrame = [&](bool forceRedraw) {
+        if (backend->shouldClose) return;
+        pollGamepads();
+
+        editor::EditorFrameState state{backend->redrawRequested};
+        state.framePeriod = backend->framePeriod;
+        state.forceRedraw = forceRedraw;
+        state.minimized = isWindowMinimized(backend->mainWindow);
+        state.focused = backend->mainWindow->focused;
+        getWindowSize(backend->mainWindow, state.width, state.height);
+        if (!backend->editorFrame.run(state))
+            backend->shouldClose = true;
+    };
+
+    app.setStartupPump([&](bool render) {
+        processEvents(0.0);
+        if (render && !backend->shouldClose)
+            renderFrame(true);
+    });
+
+    bool engineStarted = false;
+    if (!backend->shouldClose) {
+        app.engineInit(argc, argv);
+        engineStarted = true;
+        // Match GLFW/SDL soft hide at startup: keep the OS cursor manageable by
+        // ImGui. hideEditorCursor() sets NoMouseCursorChange and would leave the
+        // pointer permanently invisible in NORMAL edit mode.
+        XDefineCursor(backend->display, backend->mainWindow->handle,
+                      WindowLinux::invisibleCursor());
+    }
+    bool engineViewReady = false;
+    if (engineStarted && !backend->shouldClose) {
+        app.engineViewLoaded();
+        engineViewReady = true;
+    }
+    if (engineStarted && !backend->shouldClose)
+        app.loadStartupProject();
 
     app.setWakeCallback([]() {
         if (!backend || backend->wakePipe[1] < 0) return;
@@ -2817,15 +2856,8 @@ int editor::Backend::init(int argc, char* argv[]) {
 
     while (!backend->shouldClose) {
         processEvents(backend->editorFrame.isIdle() ? IDLE_WAIT_TIMEOUT : 0.0);
-        pollGamepads();
-
-        editor::EditorFrameState state{backend->redrawRequested};
-        state.framePeriod = backend->framePeriod;
-        state.minimized = isWindowMinimized(backend->mainWindow);
-        state.focused = backend->mainWindow->focused;
-        getWindowSize(backend->mainWindow, state.width, state.height);
-        if (!backend->editorFrame.run(state))
-            backend->shouldClose = true;
+        if (backend->shouldClose) break;
+        renderFrame(false);
     }
 
     app.shutdownBackgroundWork();
@@ -2856,11 +2888,13 @@ int editor::Backend::init(int argc, char* argv[]) {
     backend->renderer->shutdownImGui();
     shutdownImGuiPlatform();
     ImGui::DestroyContext();
-    app.engineViewDestroyed();
+    if (engineViewReady)
+        app.engineViewDestroyed();
     NFD_Quit();
     backend->renderer.reset();
     shutdownX11();
-    app.engineShutdown();
+    if (engineStarted)
+        app.engineShutdown();
     return 0;
 }
 

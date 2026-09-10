@@ -589,9 +589,23 @@ bool renderMainWindow(ImDrawData* drawData) {
     return true;
 }
 
-bool renderLiveResizeFrame() {
-    if (!backend || !backend->renderingReady || backend->frameInProgress ||
-        !backend->liveResizeActive)
+void processEvents(NSDate* deadline) {
+    NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                      untilDate:deadline
+                                         inMode:NSDefaultRunLoopMode
+                                        dequeue:YES];
+    while (event) {
+        [NSApp sendEvent:event];
+        event = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                  untilDate:NSDate.distantPast
+                                     inMode:NSDefaultRunLoopMode
+                                    dequeue:YES];
+    }
+    [NSApp updateWindows];
+}
+
+bool renderEditorFrame() {
+    if (!backend || !backend->renderingReady || backend->frameInProgress)
         return false;
 
     const bool visible = !backend->window.miniaturized &&
@@ -625,6 +639,10 @@ bool renderLiveResizeFrame() {
     }
     backend->frameInProgress = false;
     return true;
+}
+
+bool renderLiveResizeFrame() {
+    return backend && backend->liveResizeActive && renderEditorFrame();
 }
 
 void stopLiveResizeTimer() {
@@ -953,6 +971,16 @@ int editor::Backend::init(int argc, char* argv[]) {
         WindowMac::applyInitialWindowMode(app.getInitialWindowMaximized(), false);
         updateFramePeriod();
 
+        app.setStartupPump([](bool render) {
+            @autoreleasepool {
+                processEvents(NSDate.distantPast);
+                if (render && !backend->shouldClose)
+                    renderEditorFrame();
+            }
+        });
+        if (!backend->shouldClose)
+            app.loadStartupProject();
+
         app.setWakeCallback([]() { postWakeEvent(); });
         Project* activeProject = app.getProject();
         double lastActivityTime = monotonicSeconds();
@@ -966,20 +994,7 @@ int editor::Backend::init(int argc, char* argv[]) {
                 NSDate* deadline = idleFrame
                     ? [NSDate dateWithTimeIntervalSinceNow:IDLE_WAIT_TIMEOUT]
                     : NSDate.distantPast;
-                NSEvent* event = [NSApp
-                    nextEventMatchingMask:NSEventMaskAny
-                                untilDate:deadline
-                                   inMode:NSDefaultRunLoopMode
-                                  dequeue:YES];
-                while (event) {
-                    [NSApp sendEvent:event];
-                    event = [NSApp
-                        nextEventMatchingMask:NSEventMaskAny
-                                    untilDate:NSDate.distantPast
-                                       inMode:NSDefaultRunLoopMode
-                                      dequeue:YES];
-                }
-                [NSApp updateWindows];
+                processEvents(deadline);
                 if (backend->shouldClose) break;
 
                 const bool minimized = backend->window.miniaturized;

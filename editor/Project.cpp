@@ -2974,6 +2974,7 @@ void editor::Project::loadScene(fs::path filepath, bool opened, bool isNewScene,
             fullPath = getProjectPath() / fullPath;
         }
 
+        editor::getEditorHost().reportStartupProgress("Loading scenes...");
         YAML::Node sceneNode = YAML::LoadFile(fullPath.string());
 
         SceneProject* targetScene = nullptr;
@@ -3032,6 +3033,7 @@ void editor::Project::loadScene(fs::path filepath, bool opened, bool isNewScene,
         if (opened){
             // Sync linked materials with latest file contents on disk
             for (Entity entity : targetScene->entities) {
+                editor::getEditorHost().reportStartupProgress();
                 MeshComponent* mesh = targetScene->scene->findComponent<MeshComponent>(entity);
                 if (!mesh) continue;
 
@@ -3751,9 +3753,13 @@ void editor::Project::copyEngineApiToProject() {
 
         int updatedFiles = 0;
 
+        editor::getEditorHost().reportStartupProgress("Syncing engine API...");
+
         // Sync only files whose contents actually changed so reopening the editor
         // does not touch header timestamps and force a rebuild of game scripts.
         for (const auto& dirEntry : std::filesystem::recursive_directory_iterator(engineApiSource)) {
+            editor::getEditorHost().reportStartupProgress();
+
             if (dirEntry.is_regular_file()) {
                 auto ext = dirEntry.path().extension().string();
                 auto relPath = std::filesystem::relative(dirEntry.path(), engineApiSource);
@@ -4182,6 +4188,7 @@ bool editor::Project::loadProject(const std::filesystem::path path, bool updateL
         }
 
         // Load and parse project file
+        editor::getEditorHost().reportStartupProgress("Loading project...");
         YAML::Node projectNode = YAML::LoadFile(projectFile.string());
 
         editor::getEditorHost().prepareForProjectSwitch();
@@ -4190,6 +4197,7 @@ bool editor::Project::loadProject(const std::filesystem::path path, bool updateL
         projectPath = path;
 
         Stream::decodeProject(this, projectNode);
+        editor::getEditorHost().reportStartupProgress("Finishing project load...");
 
         // Guarantee a non-empty name: project.yaml files without a "name" field
         // (older or hand-authored projects) would otherwise leave libName empty
