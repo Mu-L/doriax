@@ -16,6 +16,7 @@
 #include "command/type/RemoveChildSceneCmd.h"
 
 #include "util/CrashHandler.h"
+#include "util/FileDialogs.h"
 #include "util/ProjectUtils.h"
 #include "util/Util.h"
 
@@ -163,7 +164,22 @@ void editor::App::openProjectFunc(){
     }
 
     auto openProject = [this]() {
-        requestProjectChange([this]() { project.openProject(); });
+        #ifdef _WIN32
+        const char* homeDir = std::getenv("USERPROFILE");
+        #else
+        const char* homeDir = std::getenv("HOME");
+        #endif
+        const std::string selectedDir = FileDialogs::openFileDialog(
+            homeDir ? homeDir : "", FILE_DIALOG_ALL, true);
+        if (selectedDir.empty()) return;
+
+        const std::filesystem::path projectDir(selectedDir);
+        if (!std::filesystem::exists(projectDir / "project.yaml")) {
+            registerAlert("Error", "The selected directory is not a valid project. No project.yaml file found!");
+            return;
+        }
+
+        requestProjectChange([this, projectDir]() { project.loadProject(projectDir); });
     };
     if (project.hasScenesUnsavedChanges() || codeEditor->hasUnsavedChanges() || project.isTempUnsavedProject()) {
         registerConfirmAlert(

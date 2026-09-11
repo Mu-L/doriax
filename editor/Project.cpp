@@ -4246,45 +4246,6 @@ bool editor::Project::loadProject(const std::filesystem::path path, bool updateL
     }
 }
 
-bool editor::Project::openProject() {
-    if (isAnyScenePlaying()) {
-        Out::warning("Cannot open a project while a scene is running or stopping.");
-        return false;
-    }
-
-    // Get user's home directory as default path
-    std::string homeDirPath;
-    #ifdef _WIN32
-    homeDirPath = std::filesystem::path(getenv("USERPROFILE")).string();
-    #else
-    homeDirPath = std::filesystem::path(getenv("HOME")).string();
-    #endif
-
-    // Open a folder selection dialog
-    std::string selectedDir = FileDialogs::openFileDialog(homeDirPath, false, true);
-
-    if (selectedDir.empty()) {
-        return false; // User canceled the dialog
-    }
-
-    std::filesystem::path projectDir = std::filesystem::path(selectedDir);
-    std::filesystem::path projectFile = projectDir / "project.yaml";
-
-    // Check if the selected directory contains a project.yaml file
-    if (!std::filesystem::exists(projectFile)) {
-        editor::getEditorHost().registerAlert("Error", "The selected directory is not a valid project. No project.yaml file found!");
-        return false;
-    }
-
-    if (loadProject(projectDir)) {
-        return true;
-    } else {
-        Out::error("Failed to open project: \"%s\"", projectDir.string().c_str());
-        editor::getEditorHost().registerAlert("Error", "Failed to open project!");
-        return false;
-    }
-}
-
 bool editor::Project::saveLoadedSceneOnStop(SceneProject* loadedSceneProject, SceneProject* editorScene, bool keepModified) {
     if (!loadedSceneProject || !editorScene || editorScene->filepath.empty()) {
         return true;
