@@ -741,15 +741,19 @@ std::string editor::Structure::getObjectIcon(Signature signature, Scene* scene){
     if (signature.test(scene->getComponentId<BundleComponent>())){
         return ICON_FA_CUBE;
     }else if (signature.test(scene->getComponentId<ModelComponent>())){
-        return ICON_FA_PERSON_WALKING;
+        return ICON_FA_PERSON_RUNNING;
     }else if (signature.test(scene->getComponentId<BoneComponent>())){
         return ICON_FA_BONE;
     }else if (signature.test(scene->getComponentId<TilemapComponent>())){
         return ICON_FA_BORDER_ALL;
+    }else if (signature.test(scene->getComponentId<SpriteComponent>())){
+        return ICON_FA_IMAGE;
     }else if (signature.test(scene->getComponentId<TerrainComponent>())){
         return ICON_FA_MOUNTAIN;
     }else if (signature.test(scene->getComponentId<MeshPolygonComponent>())){
         return ICON_FA_VECTOR_SQUARE;
+    }else if (signature.test(scene->getComponentId<MirrorComponent>())){
+        return ICON_FA_CLONE;
     }else if (signature.test(scene->getComponentId<MeshComponent>())){
         return ICON_FA_DICE_D20;
     }else if (signature.test(scene->getComponentId<SkyComponent>())){
@@ -790,6 +794,26 @@ std::string editor::Structure::getObjectIcon(Signature signature, Scene* scene){
         return ICON_FA_LINK;
     }else if (signature.test(scene->getComponentId<AnimationComponent>())){
         return ICON_FA_FILM;
+    }else if (signature.test(scene->getComponentId<SpriteAnimationComponent>())){
+        return ICON_FA_PLAY;
+    }else if (signature.test(scene->getComponentId<PositionActionComponent>())){
+        return ICON_FA_ARROWS_UP_DOWN_LEFT_RIGHT;
+    }else if (signature.test(scene->getComponentId<RotationActionComponent>())){
+        return ICON_FA_ROTATE;
+    }else if (signature.test(scene->getComponentId<ScaleActionComponent>())){
+        return ICON_FA_UP_RIGHT_AND_DOWN_LEFT_FROM_CENTER;
+    }else if (signature.test(scene->getComponentId<ColorActionComponent>())){
+        return ICON_FA_PALETTE;
+    }else if (signature.test(scene->getComponentId<AlphaActionComponent>())){
+        return ICON_FA_EYE;
+    }else if (signature.test(scene->getComponentId<TranslateTracksComponent>())){
+        return ICON_FA_ROUTE;
+    }else if (signature.test(scene->getComponentId<RotateTracksComponent>())){
+        return ICON_FA_ARROWS_SPIN;
+    }else if (signature.test(scene->getComponentId<ScaleTracksComponent>())){
+        return ICON_FA_MAXIMIZE;
+    }else if (signature.test(scene->getComponentId<MorphTracksComponent>())){
+        return ICON_FA_SHAPES;
     }else if (signature.test(scene->getComponentId<ParticlesComponent>())){
         return ICON_FA_FIRE;
     }else if (signature.test(scene->getComponentId<LinesComponent>())){
@@ -803,6 +827,8 @@ std::string editor::Structure::getObjectIcon(Signature signature, Scene* scene){
             return ICON_FA_VOLUME_HIGH;
         }
         return ICON_FA_FILE_AUDIO;
+    }else if (signature.test(scene->getComponentId<Body2DComponent>()) || signature.test(scene->getComponentId<Body3DComponent>())){
+        return ICON_FA_WEIGHT_HANGING;
     }else if (signature.test(scene->getComponentId<Transform>())){
         return ICON_FA_SITEMAP;
     }
