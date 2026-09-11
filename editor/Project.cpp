@@ -3836,6 +3836,30 @@ void editor::Project::finalizeStart(SceneProject* mainSceneProject, std::vector<
     }
 }
 
+// Entities a script spawns while playing are not in the editor list, so without this they
+// stay alive after Stop: drawn in the viewport but missing from Structure and unpickable.
+void editor::Project::destroyPlayCreatedEntities(SceneProject* sceneProject) {
+    Scene* scene = sceneProject->scene;
+
+    std::set<Entity> keep = sceneProject->playStateEntities;
+    keep.insert(sceneProject->entities.begin(), sceneProject->entities.end());
+
+    // Foliage chunks belong to MeshSystem and are streamed in while playing
+    auto meshSystem = scene->getSystem<MeshSystem>();
+    auto terrains = scene->getComponentArray<TerrainComponent>();
+    for (size_t i = 0; i < terrains->size(); i++) {
+        const std::vector<Entity> foliage = meshSystem->getFoliageEntities(terrains->getEntity(i));
+        keep.insert(foliage.begin(), foliage.end());
+    }
+
+    for (Entity entity : scene->getEntityList()) {
+        // an owner's removal can destroy other entities in this list
+        if (keep.count(entity) == 0 && scene->isEntityCreated(entity)) {
+            scene->destroyEntity(entity);
+        }
+    }
+}
+
 void editor::Project::finalizeStop(SceneProject* mainSceneProject, std::vector<PlayRuntimeScene> runtimeScenes) {
     bool saveMainOnStop = false;
     bool keepMainModified = false;
@@ -3908,11 +3932,14 @@ void editor::Project::finalizeStop(SceneProject* mainSceneProject, std::vector<P
                 }
             }
 
+            destroyPlayCreatedEntities(sceneProject);
+
             // snapshot decode leaves camera-linked textures unresolved (no framebuffer)
             CameraTextureLink::resolve(sceneProject->scene);
 
             // Clear the snapshot
             sceneProject->playStateSnapshot = YAML::Node();
+            sceneProject->playStateEntities.clear();
         }
 
         sceneProject->playState = ScenePlayState::STOPPED;
@@ -7641,6 +7668,11 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
 
         YAML::Node playSnapshot = Stream::encodeSceneProject(nullptr, mainSceneProject);
 
+        // Play reuses the edit-time Scene, so anything alive now is authored or engine
+        // owned. Whatever appears later belongs to the play session.
+        const std::vector<Entity> aliveBeforePlay = mainSceneProject->scene->getEntityList();
+        std::set<Entity> playEntities(aliveBeforePlay.begin(), aliveBeforePlay.end());
+
         if (isCancelled()) {
             markStartupDone();
             return;
@@ -7696,7 +7728,7 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
         // constructors observing a current GL context behave correctly,
         // and so that finalizeStart is invoked from the UI thread.
         editor::getEditorHost().enqueueMainThreadTask(
-            [this, session, sceneId, hasCppScripts, playSnapshot = std::move(playSnapshot)]() mutable {
+            [this, session, sceneId, hasCppScripts, playSnapshot = std::move(playSnapshot), playEntities = std::move(playEntities)]() mutable {
                 if (session->cancelled.load(std::memory_order_acquire)) {
                     session->startupThreadDone.store(true, std::memory_order_release);
                     return;
@@ -7714,6 +7746,7 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
                 }
 
                 sceneProject->playStateSnapshot = std::move(playSnapshot);
+                sceneProject->playStateEntities = std::move(playEntities);
 
                 std::vector<PlayRuntimeScene> runtimeScenesToInitialize;
                 {
