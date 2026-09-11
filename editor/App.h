@@ -85,12 +85,13 @@ namespace doriax::editor{
         bool redrawRequested = false;
         bool frameRequested = false;
 
-        // True until the first project is loaded and the editor UI can be shown.
-        bool startupLoading = true;
-        bool pumpingStartup = false;
-        std::string startupStatus = "Starting...";
-        std::function<void(bool)> startupPump;
-        std::chrono::steady_clock::time_point lastStartupFrame{};
+        // Active during startup and project changes; scene editing waits until loading finishes.
+        bool projectLoading = true;
+        bool pumpingLoading = false;
+        std::string loadingStatus = "Starting...";
+        std::function<void(bool)> loadingPump;
+        std::function<void()> pendingProjectChange;
+        std::chrono::steady_clock::time_point lastLoadingFrame{};
 
         // Footer stats, sampled only from consecutive drawn frames (see engineRender).
         bool renderedScenePrevFrame = false;
@@ -168,6 +169,7 @@ namespace doriax::editor{
         void saveAllFunc(std::function<void(bool)> callback = nullptr);
         void saveAllAndProject(std::function<void()> onSuccess);
         void openProjectFunc();
+        void requestProjectChange(std::function<void()> change);
         bool canEditSelection(bool duplicate);
         void deleteSelection();
         void duplicateSelection();
@@ -211,14 +213,15 @@ namespace doriax::editor{
         void engineInit(int argc, char** argv);
         void engineViewLoaded();
         void loadStartupProject();
+        void processProjectChange();
         void engineRender();
         void engineViewDestroyed();
         void engineShutdown();
 
-        bool isStartupLoading() const { return startupLoading; }
-        const std::string& getStartupStatus() const { return startupStatus; }
-        void setStartupPump(std::function<void(bool render)> pump);
-        void reportStartupProgress(const std::string& status = {}) override;
+        bool isProjectLoading() const { return projectLoading; }
+        const std::string& getLoadingStatus() const { return loadingStatus; }
+        void setLoadingPump(std::function<void(bool render)> pump);
+        void reportLoadingProgress(const std::string& status = {}) override;
 
         void addNewSceneToDock(uint32_t sceneId) override;
         void addNewCodeWindowToDock(fs::path path, bool force = false);

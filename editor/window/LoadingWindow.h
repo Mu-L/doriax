@@ -22,7 +22,7 @@ namespace doriax::editor {
         void show();
 
     private:
-        void drawStartupOverlay(const std::string& status);
+        void drawProjectOverlay(const std::string& status);
         void drawProgressModal(const OverallBuildProgress& progress);
     };
 

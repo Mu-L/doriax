@@ -2821,7 +2821,7 @@ int editor::Backend::init(int argc, char* argv[]) {
             backend->shouldClose = true;
     };
 
-    app.setStartupPump([&](bool render) {
+    app.setLoadingPump([&](bool render) {
         processEvents(0.0);
         if (render && !backend->shouldClose)
             renderFrame(true);
@@ -2856,6 +2856,8 @@ int editor::Backend::init(int argc, char* argv[]) {
 
     while (!backend->shouldClose) {
         processEvents(backend->editorFrame.isIdle() ? IDLE_WAIT_TIMEOUT : 0.0);
+        if (backend->shouldClose) break;
+        app.processProjectChange();
         if (backend->shouldClose) break;
         renderFrame(false);
     }

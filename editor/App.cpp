@@ -162,23 +162,17 @@ void editor::App::openProjectFunc(){
         return;
     }
 
+    auto openProject = [this]() {
+        requestProjectChange([this]() { project.openProject(); });
+    };
     if (project.hasScenesUnsavedChanges() || codeEditor->hasUnsavedChanges() || project.isTempUnsavedProject()) {
-        Backend::getApp().registerConfirmAlert(
+        registerConfirmAlert(
             "Unsaved Changes",
             "There are unsaved changes. Do you want to save them before opening another project?",
-            [this]() {
-                saveAllAndProject([this]() {
-                    this->project.openProject();
-                });
-            },
-            [this]() {
-                // No callback - just continue without saving
-                project.openProject();
-            }
-        );
+            [this, openProject]() { saveAllAndProject(openProject); },
+            openProject);
     } else {
-        // No unsaved changes, proceed directly
-        project.openProject();
+        openProject();
     }
 }
 
@@ -435,7 +429,7 @@ editor::PlatformMenuModel editor::App::buildMenuModel(){
 }
 
 void editor::App::executeMenuCommand(const PlatformMenuCommand& command){
-    if (startupLoading) return;
+    if (projectLoading || pendingProjectChange) return;
 
     const auto action = static_cast<AppMenuCommand>(command.id);
     switch (action) {
@@ -443,7 +437,9 @@ void editor::App::executeMenuCommand(const PlatformMenuCommand& command){
             if (project.isAnyScenePlaying()) return;
             std::string projectName = "MyDoriaxProject";
             auto startFreshProject = [this, projectName]() {
-                if (project.createTempProject(projectName, true)) aiChatWindow->startNewChat();
+                requestProjectChange([this, projectName]() {
+                    if (project.createTempProject(projectName, true)) aiChatWindow->startNewChat();
+                });
             };
             if (project.hasScenesUnsavedChanges() || codeEditor->hasUnsavedChanges() ||
                 project.isTempUnsavedProject()) {
@@ -475,17 +471,18 @@ void editor::App::executeMenuCommand(const PlatformMenuCommand& command){
         case AppMenuCommand::OpenRecentProject: {
             if (command.payload.empty() || project.isAnyScenePlaying()) return;
             const std::filesystem::path path(command.payload);
+            auto openRecentProject = [this, path]() {
+                requestProjectChange([this, path]() { project.loadProject(path); });
+            };
             if (project.hasScenesUnsavedChanges() || codeEditor->hasUnsavedChanges() ||
                 project.isTempUnsavedProject()) {
                 registerConfirmAlert(
                     "Unsaved Changes",
                     "There are unsaved changes. Do you want to save them before opening another project?",
-                    [this, path]() {
-                        saveAllAndProject([this, path]() { project.loadProject(path); });
-                    },
-                    [this, path]() { project.loadProject(path); });
+                    [this, openRecentProject]() { saveAllAndProject(openRecentProject); },
+                    openRecentProject);
             } else {
-                project.loadProject(path);
+                openRecentProject();
             }
             break;
         }
@@ -1525,7 +1522,10 @@ void editor::App::show(){
     }
     Theme::applyDpiScale(dpiScale);
 
-    if (startupLoading) {
+    if (projectLoading) {
+        if (isInitialized) {
+            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_KeepAliveOnly);
+        }
         loadingWindow->show();
         return;
     }
@@ -1690,34 +1690,34 @@ void editor::App::show(){
     persistPanelVisibilitySettings();
 }
 
-void editor::App::setStartupPump(std::function<void(bool)> pump) {
-    startupPump = std::move(pump);
+void editor::App::setLoadingPump(std::function<void(bool)> pump) {
+    loadingPump = std::move(pump);
 }
 
-void editor::App::reportStartupProgress(const std::string& status) {
-    if (!isMainThread() || !startupLoading || pumpingStartup) return;
-    if (!status.empty()) startupStatus = status;
-    if (!startupPump) return;
+void editor::App::reportLoadingProgress(const std::string& status) {
+    if (!isMainThread() || !projectLoading || pumpingLoading) return;
+    if (!status.empty()) loadingStatus = status;
+    if (!loadingPump) return;
 
     const auto now = std::chrono::steady_clock::now();
-    if (lastStartupFrame.time_since_epoch().count() != 0 &&
-        now - lastStartupFrame < std::chrono::milliseconds(33)) return;
-    lastStartupFrame = now;
+    if (lastLoadingFrame.time_since_epoch().count() != 0 &&
+        now - lastLoadingFrame < std::chrono::milliseconds(33)) return;
+    lastLoadingFrame = now;
 
     // Project loading stays on the main thread. Pump only native events and the
     // loading UI here; editor tasks must wait until the project is complete.
-    pumpingStartup = true;
+    pumpingLoading = true;
     try {
-        startupPump(Engine::isViewLoaded());
+        loadingPump(Engine::isViewLoaded());
     } catch (...) {
-        pumpingStartup = false;
+        pumpingLoading = false;
         throw;
     }
-    pumpingStartup = false;
+    pumpingLoading = false;
 }
 
 void editor::App::engineInit(int argc, char** argv) {
-    reportStartupProgress("Initializing engine...");
+    reportLoadingProgress("Initializing engine...");
     Engine::systemInit(argc, argv, new editor::Platform(&project));
 
     Engine::pauseGameEvents(true);
@@ -1742,13 +1742,13 @@ void editor::App::engineInit(int argc, char** argv) {
 }
 
 void editor::App::engineViewLoaded(){
-    reportStartupProgress("Initializing graphics...");
+    reportLoadingProgress("Initializing graphics...");
     Engine::systemViewLoaded();
 }
 
 void editor::App::loadStartupProject() {
-    lastStartupFrame = {};
-    reportStartupProgress("Loading project...");
+    lastLoadingFrame = {};
+    reportLoadingProgress("Loading project...");
 
     std::filesystem::path lastProjectPath = AppSettings::getLastProjectPath();
 
@@ -1762,13 +1762,40 @@ void editor::App::loadStartupProject() {
         project.createTempProject("MyDoriaxProject");
     }
 
-    startupLoading = false;
-    startupPump = nullptr;
+    projectLoading = false;
+    requestRedraw();
+}
+
+void editor::App::requestProjectChange(std::function<void()> change) {
+    if (projectLoading || pendingProjectChange) return;
+    pendingProjectChange = std::move(change);
+    requestRedraw();
+}
+
+void editor::App::processProjectChange() {
+    if (projectLoading || !pendingProjectChange) return;
+    auto change = std::move(pendingProjectChange);
+    pendingProjectChange = nullptr;
+    if (project.isAnyScenePlaying()) return;
+
+    // Menu and dialog callbacks queue the change. Run it between frames so the
+    // loading pump can draw without nesting ImGui frames or invalidating scene UI.
+    projectLoading = true;
+    lastLoadingFrame = {};
+    Backend::setMainMenu({}, {});
+    try {
+        reportLoadingProgress("Loading project...");
+        change();
+    } catch (const std::exception& e) {
+        Out::error("Failed to switch projects: %s", e.what());
+        registerAlert("Error", "Failed to switch projects.");
+    }
+    projectLoading = false;
     requestRedraw();
 }
 
 void editor::App::engineRender(){
-    if (startupLoading) {
+    if (projectLoading) {
         SystemRender::executeQueue();
         return;
     }
@@ -1992,6 +2019,8 @@ void editor::App::setWakeCallback(std::function<void()> cb) {
 }
 
 void editor::App::shutdownBackgroundWork() {
+    loadingPump = nullptr;
+    pendingProjectChange = nullptr;
     // Before glfwTerminate/SDL_Quit, or a late reply posts to a dead window system.
     if (aiChatWindow) aiChatWindow->shutdown();
     wakeCallback = nullptr;
@@ -1999,7 +2028,7 @@ void editor::App::shutdownBackgroundWork() {
 
 void editor::App::engineViewDestroyed(){
     imageViewerWindow->closeAll();
-    // Closing during startup can leave uploads committed before any scene frame
+    // Closing during project loading can leave uploads committed before any scene frame
     // consumes them. Drain that batch before shutdown waits to flush the queue.
     SystemRender::executeQueue();
     Engine::systemViewDestroyed();
@@ -2010,7 +2039,7 @@ void editor::App::engineShutdown(){
 }
 
 void editor::App::addNewSceneToDock(uint32_t sceneId){
-    if (isInitialized){
+    if (isInitialized && !projectLoading){
         const std::string windowName = "###Scene" + std::to_string(sceneId);
         const SceneProject* sceneProject = project.getScene(sceneId);
         const bool isUnsavedScene = sceneProject && sceneProject->filepath.empty();
@@ -2035,6 +2064,9 @@ void editor::App::prepareForProjectSwitch() {
     // Thumbnail cancellation prevents new preview loads from being queued;
     // now quiesce any remaining scene/model jobs before pool cleanup.
     MeshSystem::cancelAllAsyncModelLoads();
+    // Project deletes these scenes and framebuffers before another scene frame runs.
+    Engine::removeAllScenes();
+    Engine::setFramebuffer(nullptr);
     codeEditor->closeAll();
     outputWindow->clear();
     sceneWindow->resetProjectState();
@@ -2055,13 +2087,13 @@ void editor::App::requestScenePlayFocus(uint32_t sceneId) {
 }
 
 void editor::App::addNewCodeWindowToDock(fs::path path, bool force){
-    if (isInitialized){
+    if (isInitialized && !projectLoading){
         dockTabWindow("###" + path.string(), force);
     }
 }
 
 void editor::App::addImageViewerWindowToDock(fs::path path, bool force){
-    if (isInitialized){
+    if (isInitialized && !projectLoading){
         dockTabWindow(ImageViewerWindow::getWindowId(path), force);
     }
 }
@@ -2477,7 +2509,7 @@ void editor::App::processNextSaveDialog() {
 }
 
 void editor::App::processMainThreadTasks() {
-    if (startupLoading) return;
+    if (projectLoading) return;
 
     std::queue<std::function<void()>> tasks;
     {
@@ -2559,7 +2591,7 @@ void editor::App::saveWindowSettings(int width, int height, bool maximized, floa
 }
 
 void editor::App::exit() {
-    if (startupLoading) {
+    if (projectLoading) {
         Backend::closeWindow();
         return;
     }

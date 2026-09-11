@@ -971,7 +971,7 @@ int editor::Backend::init(int argc, char* argv[]) {
         WindowMac::applyInitialWindowMode(app.getInitialWindowMaximized(), false);
         updateFramePeriod();
 
-        app.setStartupPump([](bool render) {
+        app.setLoadingPump([](bool render) {
             @autoreleasepool {
                 processEvents(NSDate.distantPast);
                 if (render && !backend->shouldClose)
@@ -995,6 +995,8 @@ int editor::Backend::init(int argc, char* argv[]) {
                     ? [NSDate dateWithTimeIntervalSinceNow:IDLE_WAIT_TIMEOUT]
                     : NSDate.distantPast;
                 processEvents(deadline);
+                if (backend->shouldClose) break;
+                app.processProjectChange();
                 if (backend->shouldClose) break;
 
                 const bool minimized = backend->window.miniaturized;

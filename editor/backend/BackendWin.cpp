@@ -865,7 +865,7 @@ int editor::Backend::init(int argc, char* argv[]) {
         frameInProgress = false;
     };
 
-    app.setStartupPump([&](bool render) {
+    app.setLoadingPump([&](bool render) {
         processMessages(false);
         if (render && !backend->shouldClose)
             renderFrame(true);
@@ -893,6 +893,8 @@ int editor::Backend::init(int argc, char* argv[]) {
     backend->liveResizeFrame = [&]() { renderFrame(true); };
     while (!backend->shouldClose) {
         processMessages(backend->editorFrame.isIdle());
+        if (backend->shouldClose) break;
+        app.processProjectChange();
         if (backend->shouldClose) break;
         renderFrame(false);
     }

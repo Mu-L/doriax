@@ -51,7 +51,7 @@ void EditorHost::saveAllCodeEditors() {
 void EditorHost::requestScenePlayFocus(uint32_t) {
 }
 
-void EditorHost::reportStartupProgress(const std::string&) {
+void EditorHost::reportLoadingProgress(const std::string&) {
 }
 
 void EditorHost::registerAlert(std::string title, std::string message) {

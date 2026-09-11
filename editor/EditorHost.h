@@ -32,8 +32,8 @@ namespace doriax::editor {
         virtual void saveAllCodeEditors();
         virtual void requestScenePlayFocus(uint32_t sceneId);
 
-        // Refresh the loading UI and native events at startup checkpoints.
-        virtual void reportStartupProgress(const std::string& status = {});
+        // Refresh the loading UI and native events at project loading checkpoints.
+        virtual void reportLoadingProgress(const std::string& status = {});
 
         virtual void registerAlert(std::string title, std::string message);
         virtual void registerConfirmAlert(std::string title, std::string message, std::function<void()> onYes, std::function<void()> onNo = nullptr);

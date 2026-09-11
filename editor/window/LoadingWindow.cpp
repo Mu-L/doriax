@@ -20,8 +20,8 @@ LoadingWindow::~LoadingWindow() {
 
 void LoadingWindow::show() {
     App& app = Backend::getApp();
-    if (app.isStartupLoading()) {
-        drawStartupOverlay(app.getStartupStatus());
+    if (app.isProjectLoading()) {
+        drawProjectOverlay(app.getLoadingStatus());
         return;
     }
 
@@ -50,7 +50,7 @@ void LoadingWindow::show() {
     }
 }
 
-void LoadingWindow::drawStartupOverlay(const std::string& status) {
+void LoadingWindow::drawProjectOverlay(const std::string& status) {
     if (!logoLoaded) {
         TextureData data;
         data.loadTextureFromMemory(doriax_logo_png, doriax_logo_png_len);
@@ -61,8 +61,8 @@ void LoadingWindow::drawStartupOverlay(const std::string& status) {
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowPos(viewport->Pos);
+    ImGui::SetNextWindowSize(viewport->Size);
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -76,7 +76,7 @@ void LoadingWindow::drawStartupOverlay(const std::string& status) {
         ImGuiWindowFlags_NoNav |
         ImGuiWindowFlags_NoInputs;
 
-    if (ImGui::Begin("##StartupLoading", nullptr, flags)) {
+    if (ImGui::Begin("##ProjectLoading", nullptr, flags)) {
         const ImVec2 windowSize = ImGui::GetWindowSize();
         const float barWidth = std::min(Theme::dpi(360.0f), windowSize.x);
         const float barHeight = Theme::dpi(6.0f);
