@@ -95,7 +95,7 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<TimedAction, Action>("TimedAction")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setFunctionType", &TimedAction::setFunctionType)
         .addFunction("getTimedActionComponent", &TimedAction::getComponent<TimedActionComponent>)
         .addFunction("getTime", &TimedAction::getTime)
@@ -106,13 +106,13 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<AlphaAction, TimedAction>("AlphaAction")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setAction", &AlphaAction::setAction)
         .endClass();
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<ColorAction, TimedAction>("ColorAction")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setAction", 
             luabridge::overload<Vector3, Vector3, float, bool>(&ColorAction::setAction),
             luabridge::overload<Vector4, Vector4, float, bool>(&ColorAction::setAction))
@@ -120,25 +120,25 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<PositionAction, TimedAction>("PositionAction")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setAction", &PositionAction::setAction)
         .endClass();
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<RotationAction, TimedAction>("RotationAction")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setAction", &RotationAction::setAction)
         .endClass();
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<ScaleAction, TimedAction>("ScaleAction")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setAction", &ScaleAction::setAction)
         .endClass();
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<Particles, Action>("Particles")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("reset", &Particles::reset)
         .addProperty("rate", &Particles::getRate, &Particles::setRate)
         .addProperty("maxPerUpdate", &Particles::getMaxPerUpdate, &Particles::setMaxPerUpdate)
@@ -244,7 +244,7 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<SpriteAnimation, Action>("SpriteAnimation")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setAnimation", 
             luabridge::overload<std::vector<int>, std::vector<int>, bool>(&SpriteAnimation::setAnimation),
             luabridge::overload<int, int, int, bool>(&SpriteAnimation::setAnimation))
@@ -319,7 +319,7 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<MorphTracks, Action>("MorphTracks")
-        .addConstructor <void(Scene*), void(Scene*, std::vector<float>, std::vector<std::vector<float>>)> ()
+        .addConstructor <void(Scene*), void(Scene*, Entity), void(Scene*, std::vector<float>, std::vector<std::vector<float>>)> ()
         .addFunction("setTimes", &MorphTracks::setTimes)
         .addFunction("setValues", &MorphTracks::setValues)
         .addFunction("setEasings", &MorphTracks::setEasings)
@@ -328,7 +328,7 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<RotateTracks, Action>("RotateTracks")
-        .addConstructor <void(Scene*), void(Scene*, std::vector<float>, std::vector<Quaternion>)> ()
+        .addConstructor <void(Scene*), void(Scene*, Entity), void(Scene*, std::vector<float>, std::vector<Quaternion>)> ()
         .addFunction("setTimes", &RotateTracks::setTimes)
         .addFunction("setValues", &RotateTracks::setValues)
         .addFunction("setEasings", &RotateTracks::setEasings)
@@ -337,7 +337,7 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<ScaleTracks, Action>("ScaleTracks")
-        .addConstructor <void(Scene*), void(Scene*, std::vector<float>, std::vector<Vector3>)> ()
+        .addConstructor <void(Scene*), void(Scene*, Entity), void(Scene*, std::vector<float>, std::vector<Vector3>)> ()
         .addFunction("setTimes", &ScaleTracks::setTimes)
         .addFunction("setValues", &ScaleTracks::setValues)
         .addFunction("setEasings", &ScaleTracks::setEasings)
@@ -346,7 +346,7 @@ void LuaBinding::registerActionClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<TranslateTracks, Action>("TranslateTracks")
-        .addConstructor <void(Scene*), void(Scene*, std::vector<float>, std::vector<Vector3>)> ()
+        .addConstructor <void(Scene*), void(Scene*, Entity), void(Scene*, std::vector<float>, std::vector<Vector3>)> ()
         .addFunction("setTimes", &TranslateTracks::setTimes)
         .addFunction("setValues", &TranslateTracks::setValues)
         .addFunction("setEasings", &TranslateTracks::setEasings)

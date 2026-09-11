@@ -390,7 +390,7 @@ void LuaBinding::registerObjectClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<Mesh, Object>("Mesh")
-        .addConstructor <void (*) (Scene*)> ()
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity)> ()
         .addFunction("setTexture", 
             luabridge::overload<const std::string&>(&Mesh::setTexture),
             luabridge::overload<const std::string&,TextureData>(&Mesh::setTexture),
@@ -988,8 +988,8 @@ void LuaBinding::registerObjectClasses(lua_State *L){
 
     luabridge::getGlobalNamespace(L)
         .deriveClass<Sound, EntityHandle>("Sound")
-        .addConstructor <void (*) (Scene*)> ()
-        .addConstructor <void (*) (Scene*, bool)> ()
+        // Entity before bool: a number must bind the entity overload, not is3D
+        .addConstructor <void (*) (Scene*), void (*) (Scene*, Entity), void (*) (Scene*, bool)> ()
         .addFunction("loadSound", &Sound::loadSound)
         .addFunction("destroySound", &Sound::destroySound)
         .addFunction("getObject", &Sound::getObject)
