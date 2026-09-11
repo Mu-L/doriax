@@ -354,7 +354,7 @@ void paintNativeLoading(HWND window, HDC deviceContext) {
     HFONT font = CreateFontW(
         fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-        DEFAULT_PITCH | FF_SANS_SERIF, L"Segoe UI");
+        DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
     HGDIOBJ previousFont = font ? SelectObject(deviceContext, font) : nullptr;
     DrawTextW(deviceContext, L"Loading Doriax Engine...", -1, &client,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
