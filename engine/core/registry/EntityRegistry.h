@@ -118,10 +118,10 @@ namespace doriax {
         Entity findEntity(const std::string& name) const;
         // Same lookup, but restricted to descendants of 'parent'. Use this to resolve a
         // named child without depending on globally unique names.
-        Entity findEntity(const std::string& name, Entity parent);
+        Entity findEntity(const std::string& name, Entity parent) const;
 
         Entity findOldestParent(Entity entity);
-        bool isParentOf(Entity parent, Entity child);
+        bool isParentOf(Entity parent, Entity child) const;
         size_t findBranchLastIndex(Entity entity);
 
         Entity getLastEntity() const;

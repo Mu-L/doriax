@@ -245,7 +245,7 @@ Entity EntityRegistry::findEntity(const std::string& name) const {
     return NULL_ENTITY;
 }
 
-Entity EntityRegistry::findEntity(const std::string& name, Entity parent) {
+Entity EntityRegistry::findEntity(const std::string& name, Entity parent) const {
     for (Entity entity : entityManager.getEntityList()){
         if (entityManager.getName(entity) == name && isParentOf(parent, entity)){
             return entity;
@@ -275,7 +275,7 @@ Entity EntityRegistry::findOldestParent(Entity entity){
     return entity;
 }
 
-bool EntityRegistry::isParentOf(Entity parent, Entity child){
+bool EntityRegistry::isParentOf(Entity parent, Entity child) const {
     auto transforms = componentManager.getComponentArray<Transform>();
 
     if (!getSignature(parent).test(getComponentId<Transform>()) || !getSignature(child).test(getComponentId<Transform>())) {

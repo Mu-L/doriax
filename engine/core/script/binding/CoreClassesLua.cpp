@@ -595,7 +595,7 @@ void LuaBinding::registerCoreClasses(lua_State *L){
         .addFunction("getEntityName", &EntityRegistry::getEntityName)
         .addFunction("findEntity",
             luabridge::constOverload<const std::string&>(&EntityRegistry::findEntity),
-            luabridge::overload<const std::string&, Entity>(&EntityRegistry::findEntity))
+            luabridge::constOverload<const std::string&, Entity>(&EntityRegistry::findEntity))
         .addFunction("getSignature", &EntityRegistry::getSignature)
         .addFunction("addEntityChild", &EntityRegistry::addEntityChild)
         .addFunction("moveChildToIndex", &EntityRegistry::moveChildToIndex)
