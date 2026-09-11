@@ -562,26 +562,7 @@ void ActionSystem::setSpriteTextureRect(MeshComponent& mesh, SpriteComponent& sp
         return;
     }
 
-    const Rect& frameRect = sprite.framesRect[frameId].rect;
-
-    if (!frameRect.isNormalized()) {
-        Texture& texture = mesh.submeshes[0].material.baseColorTexture;
-        if (!texture.empty() && texture.getWidth() == 0 && texture.getHeight() == 0) {
-            texture.load();
-        }
-        if (texture.getWidth() > 0 && texture.getHeight() > 0) {
-            mesh.submeshes[0].textureRect = Rect(
-                frameRect.getX() / (float)texture.getWidth(),
-                frameRect.getY() / (float)texture.getHeight(),
-                frameRect.getWidth() / (float)texture.getWidth(),
-                frameRect.getHeight() / (float)texture.getHeight()
-            );
-        } else {
-            mesh.submeshes[0].textureRect = frameRect;
-        }
-    } else {
-        mesh.submeshes[0].textureRect = frameRect;
-    }
+    MeshSystem::setSpriteFrameRect(mesh, sprite, sprite.framesRect[frameId].rect);
 }
 
 void ActionSystem::spriteActionStart(MeshComponent& mesh, SpriteComponent& sprite, SpriteAnimationComponent& spriteanim){

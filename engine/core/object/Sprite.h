@@ -17,6 +17,8 @@ namespace doriax{
     private:
         SpriteAnimation* animation;
 
+        void applyFrameRect(Rect frameRect);
+
     public:
         Sprite(Scene* scene);
         Sprite(Scene* scene, Entity entity);

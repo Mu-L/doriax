@@ -36,6 +36,10 @@ namespace doriax{
 
         PivotPreset pivotPreset = PivotPreset::BOTTOM_LEFT;
 
+        // Frame chosen before the texture size was known, in pixels
+        Rect pendingFrameRect;
+        bool needUpdateFrameRect = false;
+
         bool needUpdateSprite = true;
     };
     

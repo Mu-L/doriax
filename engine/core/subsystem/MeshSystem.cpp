@@ -742,6 +742,32 @@ Rect MeshSystem::normalizeTileRect(Rect tileRect, unsigned int texWidth, unsigne
     return normalized;
 }
 
+// An async texture load has no size yet, so the frame is kept in pixels and converted
+// by createOrUpdateSprite once the size arrives
+void MeshSystem::setSpriteFrameRect(MeshComponent& mesh, SpriteComponent& sprite, Rect frameRect){
+    // The first slot exists before createSprite sets numSubmeshes, so scripts can
+    // select a frame while configuring a newly constructed sprite.
+
+    if (!frameRect.isNormalized()){
+        Texture& texture = mesh.submeshes[0].material.baseColorTexture;
+
+        if (!texture.empty() && texture.getWidth() == 0 && texture.getHeight() == 0){
+            texture.load();
+        }
+
+        if (texture.getWidth() == 0 || texture.getHeight() == 0){
+            sprite.pendingFrameRect = frameRect;
+            sprite.needUpdateFrameRect = true;
+            return;
+        }
+
+        frameRect = normalizeTileRect(frameRect, texture.getWidth(), texture.getHeight());
+    }
+
+    sprite.needUpdateFrameRect = false;
+    mesh.submeshes[0].textureRect = frameRect;
+}
+
 std::vector<float> MeshSystem::getCylinderSideNormals(float baseRadius, float topRadius, float height, float slices){
     float sectorStep = 2 * M_PI / slices;
     float sectorAngle;  // radian
@@ -5689,6 +5715,10 @@ bool MeshSystem::createOrUpdateSprite(SpriteComponent& sprite, MeshComponent& me
         }else{
             return false;
         }
+    }
+
+    if (sprite.needUpdateFrameRect){
+        setSpriteFrameRect(mesh, sprite, sprite.pendingFrameRect);
     }
 
     return true;

@@ -80,7 +80,7 @@ namespace doriax{
         bool createTilemap(TilemapComponent& tilemap, MeshComponent& mesh);
 
         void changeFlipY(bool& flipY, CameraComponent& camera, MeshComponent& mesh);
-        Rect normalizeTileRect(Rect tileRect, unsigned int texWidth, unsigned int texHeight);
+        static Rect normalizeTileRect(Rect tileRect, unsigned int texWidth, unsigned int texHeight);
 
         // Mesh aux
         std::vector<float> getCylinderSideNormals(float baseRadius, float topRadius, float height, float slices);
@@ -147,6 +147,9 @@ namespace doriax{
     public:
         MeshSystem(Scene* scene);
         virtual ~MeshSystem();
+
+        // Frames are authored in pixels, textureRect is in UV space
+        static void setSpriteFrameRect(MeshComponent& mesh, SpriteComponent& sprite, Rect frameRect);
 
         bool setFoliagePreviewEntity(Entity entity);
         bool hasPendingFoliageUpdates() const;

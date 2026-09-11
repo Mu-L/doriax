@@ -5070,6 +5070,11 @@ SpriteComponent editor::Stream::decodeSpriteComponent(const YAML::Node& node, co
         sprite = *oldSprite;
     }
 
+    // Pending frames are runtime requests, not part of the serialized sprite.
+    // In particular, Stop must not apply a play-time frame over the restored UVs.
+    sprite.pendingFrameRect = Rect();
+    sprite.needUpdateFrameRect = false;
+
     if (node["width"]) sprite.width = node["width"].as<unsigned int>();
     if (node["height"]) sprite.height = node["height"].as<unsigned int>();
     if (node["automaticFlipY"]) sprite.automaticFlipY = node["automaticFlipY"].as<bool>();

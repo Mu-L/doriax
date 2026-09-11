@@ -139,6 +139,8 @@ void Sprite::setTextureRect(float x, float y, float width, float height){
 void Sprite::setTextureRect(Rect textureRect){
     MeshComponent& mesh = getComponent<MeshComponent>();
 
+    // An explicit UV rectangle supersedes a frame waiting for its texture size.
+    getComponent<SpriteComponent>().needUpdateFrameRect = false;
     mesh.submeshes[0].textureRect = textureRect;
 }
 
@@ -214,10 +216,14 @@ void Sprite::removeFrame(const std::string& name){
     }
 }
 
+void Sprite::applyFrameRect(Rect frameRect){
+    MeshSystem::setSpriteFrameRect(getComponent<MeshComponent>(), getComponent<SpriteComponent>(), frameRect);
+}
+
 void Sprite::setFrame(int id){
     SpriteComponent& spritecomp = getComponent<SpriteComponent>();
     if (id >= 0 && (unsigned int)id < spritecomp.numFramesRect){
-        setTextureRect(spritecomp.framesRect[id].rect);
+        applyFrameRect(spritecomp.framesRect[id].rect);
     }else{
         Log::error("Cannot use invalid sprite frame: %i", id);
     }
@@ -227,7 +233,7 @@ void Sprite::setFrame(const std::string& name){
     SpriteComponent& spritecomp = getComponent<SpriteComponent>();
     for (unsigned int id = 0; id < spritecomp.numFramesRect; id++) {
         if (spritecomp.framesRect[id].name == name){
-            setTextureRect(spritecomp.framesRect[id].rect);
+            applyFrameRect(spritecomp.framesRect[id].rect);
             return;
         }
     }
