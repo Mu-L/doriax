@@ -255,9 +255,15 @@ These small projects demonstrate real Doriax builds running on the web. Play the
 
 Issues and pull requests are welcome. For substantial changes, start with an issue or discuss the proposal with the community on Discord.
 
-## From Supernova to Doriax
+## Project history and development
 
-Doriax Engine is the next phase of Supernova Engine. Version `0.5.5` was the final release under the previous name, and `0.6` is the first Doriax release. Some internal folders and older external references may still use the Supernova name while the transition continues.
+Doriax started in 2015 as Supernova Engine, a code-first game-development API. Public development began with the [initial commit in July 2016](https://github.com/doriaxengine/doriax/commit/88561113), and the full history is in this repository. The visual editor started in 2024 in a [separate editor repository](https://github.com/eduardodoria/doriax-editor), then named `supernova-editor`, after building complete projects with code alone proved impractical.
+
+The architecture, technical direction, and engineering decisions are made by the maintainer. Over the past year, AI coding tools have been used for bounded work: repetitive implementation, investigation, documentation, and review. The maintainer reviews and adapts what those tools produce.
+
+This is separate from Doriax's optional built-in AI assistant, which is an editor feature users choose to enable.
+
+Version `0.5.5` was the final release under the Supernova name, and `0.6` is the first Doriax release. Some internal folders and older external references may still use the Supernova name while the transition continues.
 
 ## License
 
