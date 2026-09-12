@@ -145,6 +145,24 @@ namespace {
         }
     }
 
+    // Windows CI checkouts and the shipped editor artifact use CRLF. Template
+    // patches match LF-only snippets, so normalize before searching/replacing.
+    void normalizeNewlines(std::string& text) {
+        std::string out;
+        out.reserve(text.size());
+        for (size_t i = 0; i < text.size(); ++i) {
+            if (text[i] == '\r') {
+                out.push_back('\n');
+                if (i + 1 < text.size() && text[i + 1] == '\n') {
+                    ++i;
+                }
+            } else {
+                out.push_back(text[i]);
+            }
+        }
+        text.swap(out);
+    }
+
     std::string escapeGradleString(const std::string& value) {
         std::string out;
         out.reserve(value.size());
@@ -1955,6 +1973,7 @@ bool editor::Exporter::copyEngine() {
     }
     std::string cmakeContent((std::istreambuf_iterator<char>(cmakeIfs)), std::istreambuf_iterator<char>());
     cmakeIfs.close();
+    normalizeNewlines(cmakeContent);
 
     const std::string defaultAppName = "set(APP_NAME doriax-project)";
     const std::string patchedAppName = "set(APP_NAME " + appName + ")";
@@ -2245,6 +2264,7 @@ bool editor::Exporter::writeAndroidProjectSettings() {
             return false;
         }
         out.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+        normalizeNewlines(out);
         return true;
     };
 
@@ -2436,6 +2456,7 @@ bool editor::Exporter::writeAppleProjectSettings() {
             return false;
         }
         out.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+        normalizeNewlines(out);
         return true;
     };
 
