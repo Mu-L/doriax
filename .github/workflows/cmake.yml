@@ -372,20 +372,52 @@ jobs:
           fi
           codesign --verify --strict --verbose=2 "$APP" || echo "::warning::strict verify failed"
 
-          # Artifact zips lose the executable bit, so ship a dmg too.
           set -e
-          mkdir dmg-stage dist
+          # Same loose tree the zip had before the bundle: doriax-editor,
+          # libdoriax.dylib, engine/. Actions wraps this as doriax_macos.zip.
+          BIN="$APP/Contents/MacOS"
+          mkdir -p dist/macos-zip
+          cp "$BIN/$(basename "$APP" .app)" dist/macos-zip/doriax-editor
+          for dylib in "$BIN"/*.dylib; do
+            [ -e "$dylib" ] && cp "$dylib" dist/macos-zip/
+          done
+          if [ -d "$APP/Contents/Resources/engine" ]; then
+            cp -R "$APP/Contents/Resources/engine" dist/macos-zip/engine
+          elif [ -d "$BIN/engine" ]; then
+            cp -R "$BIN/engine" dist/macos-zip/engine
+          else
+            echo "::error::no engine/ in the bundle"
+            find "$APP" | head -40
+            exit 1
+          fi
+          chmod +x dist/macos-zip/doriax-editor
+          for dylib in dist/macos-zip/*.dylib; do
+            [ -e "$dylib" ] && codesign --force --sign - --timestamp=none "$dylib"
+          done
+          codesign --force --sign - --timestamp=none dist/macos-zip/doriax-editor
+
+          # Artifact zips lose the executable bit, so ship a dmg too.
+          mkdir dmg-stage
           cp -R "$APP" dmg-stage/
           ln -s /Applications dmg-stage/Applications
           hdiutil create -volname "Doriax" -srcfolder dmg-stage -ov -format UDZO dist/Doriax.dmg
           rm -rf dmg-stage
-          ls -la dist instdir/bin
+          ls -la dist dist/macos-zip instdir/bin
 
       - name: Upload
+        if: ${{ !startsWith(matrix.config.os, 'macos') }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.config.artifact }}
           path: ./instdir/bin/*
+          if-no-files-found: error
+
+      - name: Upload macOS zip
+        if: startsWith(matrix.config.os, 'macos')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.config.artifact }}
+          path: ./dist/macos-zip/*
           if-no-files-found: error
 
       # Separate artifacts so a download is one package, not both of them.
@@ -443,7 +475,7 @@ jobs:
           # The artifacts came through an Actions zip, which dropped the
           # executable bit the release archives ship with.
           chmod +x artifacts/doriax_linux/doriax-editor
-          find artifacts/doriax_macos -path '*/Contents/MacOS/*' -type f -exec chmod +x {} +
+          chmod +x artifacts/doriax_macos/doriax-editor
 
           # A tree of binaries still needs an archive.
           (cd artifacts/doriax_windows && zip -qr "$GITHUB_WORKSPACE/release/Doriax-${VERSION}-windows-x64.zip" .)
