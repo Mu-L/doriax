@@ -478,6 +478,7 @@ namespace {
         makeFastProperty<CameraComponent, float, &CameraComponent::farClip>("far", PropertyType::Float, UpdateFlags_Camera),
         makeFastProperty<CameraComponent, bool, &CameraComponent::renderToTexture>("renderToTexture", PropertyType::Bool, UpdateFlags_Camera),
         makeFastProperty<CameraComponent, bool, &CameraComponent::transparentSort>("transparentSort", PropertyType::Bool, UpdateFlags_None),
+        makeFastProperty<CameraComponent, bool, &CameraComponent::depthTest>("depthTest", PropertyType::Bool, UpdateFlags_None),
         makeFastProperty<CameraComponent, bool, &CameraComponent::useTarget>("useTarget", PropertyType::Bool, UpdateFlags_Camera),
         makeFastProperty<CameraComponent, bool, &CameraComponent::autoResize>("autoResize", PropertyType::Bool, UpdateFlags_Camera),
         // framebuffer settings are applied by RenderSystem::update (no update flag needed)

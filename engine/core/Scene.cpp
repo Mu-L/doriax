@@ -131,6 +131,7 @@ Entity Scene::createDefaultCamera(){
     CameraComponent& camera = getComponent<CameraComponent>(defaultCamera);
     camera.type = CameraType::CAMERA_UI;
     camera.transparentSort = false;
+    camera.depthTest = false;
 
     Transform& cameratransform = getComponent<Transform>(defaultCamera);
     cameratransform.position = Vector3(0.0, 0.0, 1.0);

@@ -231,7 +231,9 @@ namespace doriax{
         PIP_DEPTH       = 1 << 2,
         PIP_RTT_INVERT  = 1 << 3, // render-to-texture with reversed winding (planar reflection)
         PIP_GBUFFER     = 1 << 4, // geometry pass with 3 color attachments
-        PIP_SHADOW_DEPTH = 1 << 5 // depth-only projective shadow atlas
+        PIP_SHADOW_DEPTH = 1 << 5, // depth-only projective shadow atlas
+        PIP_DEFAULT_NODEPTH = 1 << 6, // no depth test or write, submission order
+        PIP_RTT_NODEPTH = 1 << 7
     };
 
     //-------Start shader definition--------

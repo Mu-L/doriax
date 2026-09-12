@@ -111,6 +111,9 @@ namespace doriax{
         void setTransparentSort(bool transparentSort);
         bool isTransparentSort() const;
 
+        void setDepthTest(bool depthTest);
+        bool isDepthTest() const;
+
         Ray screenToRay(float x, float y);
 
         float getDistanceFromTarget() const;

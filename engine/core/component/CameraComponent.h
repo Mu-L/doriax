@@ -77,7 +77,12 @@ namespace doriax{
         unsigned int framebufferHeight = 512;
         TextureFilter framebufferFilter = TextureFilter::LINEAR;
 
+        // draw transparent renderables back to front (needs depthTest)
         bool transparentSort = true;
+
+        // false makes the camera ignore the depth buffer and composite in submission
+        // order, like a 2D canvas. Instance and point batches follow the main camera
+        bool depthTest = true;
 
         // when true (the default, and re-enabled by Camera::setTarget) updateCamera
         // builds the view from lookAt(position, target, up) and ignores the Transform

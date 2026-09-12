@@ -584,6 +584,18 @@ bool Camera::isTransparentSort() const{
     return camera.transparentSort;
 }
 
+void Camera::setDepthTest(bool depthTest){
+    CameraComponent& camera = getComponent<CameraComponent>();
+
+    camera.depthTest = depthTest;
+}
+
+bool Camera::isDepthTest() const{
+    CameraComponent& camera = getComponent<CameraComponent>();
+
+    return camera.depthTest;
+}
+
 Ray Camera::screenToRay(float x, float y){
     CameraComponent& camera = getComponent<CameraComponent>();
 

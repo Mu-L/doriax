@@ -32,7 +32,8 @@ bool Polygon::createPolygon(){
 bool Polygon::load(){
     UIComponent& ui = getComponent<UIComponent>();
 
-    return scene->getSystem<RenderSystem>()->loadUI(entity, ui, PIP_DEFAULT | PIP_RTT, false);
+    auto renderSystem = scene->getSystem<RenderSystem>();
+    return renderSystem->loadUI(entity, ui, renderSystem->getScenePipelines(), false);
 }
 
 void Polygon::addVertex(Vector3 vertex){

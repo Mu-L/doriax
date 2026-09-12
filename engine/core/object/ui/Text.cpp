@@ -33,7 +33,8 @@ bool Text::createText(){
 bool Text::load(){
     UIComponent& ui = getComponent<UIComponent>();
 
-    return scene->getSystem<RenderSystem>()->loadUI(entity, ui, PIP_DEFAULT | PIP_RTT, true);
+    auto renderSystem = scene->getSystem<RenderSystem>();
+    return renderSystem->loadUI(entity, ui, renderSystem->getScenePipelines(), true);
 }
 
 void Text::setFixedSize(bool fixedSize){

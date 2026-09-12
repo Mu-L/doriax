@@ -19,7 +19,8 @@ SkyBox::~SkyBox(){
 bool SkyBox::load(){
     SkyComponent& sky = getComponent<SkyComponent>();
 
-    return scene->getSystem<RenderSystem>()->loadSky(entity, sky, PIP_DEFAULT | PIP_RTT);
+    auto renderSystem = scene->getSystem<RenderSystem>();
+    return renderSystem->loadSky(entity, sky, renderSystem->getScenePipelines());
 }
 
 void SkyBox::setTextures(const std::string& id,

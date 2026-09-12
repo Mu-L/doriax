@@ -81,6 +81,22 @@ namespace {
              (material.baseColorTexture.isTransparent() || material.baseColorFactor.w != 1.0f));
     }
 
+    // the destination selects swapchain or RTT, a reflection pass reverses winding
+    // and a canvas camera drops the depth buffer entirely
+    PipelineType colorPipeline(const CameraComponent& camera, bool offscreenTarget){
+        if (!offscreenTarget)
+            return camera.depthTest ? PIP_DEFAULT : PIP_DEFAULT_NODEPTH;
+        if (camera.invertCulling)
+            return PIP_RTT_INVERT;
+        return camera.depthTest ? PIP_RTT : PIP_RTT_NODEPTH;
+    }
+
+    // a canvas camera has no depth buffer to fix blending order, so it composites
+    // strictly in submission order instead
+    bool sortsByDistance(const CameraComponent& camera){
+        return camera.depthTest && camera.transparentSort;
+    }
+
     float readSpotMaskTexel(TextureData& source, int x, int y, bool useAlpha){
         x = std::clamp(x, 0, source.getWidth() - 1);
         y = std::clamp(y, 0, source.getHeight() - 1);
@@ -227,6 +243,7 @@ void RenderSystem::load(){
     hasMultipleCameras = false;
     lastMultiCameraDraw = false;
     capturingReflectionProbe = false;
+    lastBatchSort = true;
     loadedPipelines = 0;
     hasLights2D = false;
     hasShadows2D = false;
@@ -1434,7 +1451,7 @@ void RenderSystem::renderReflectionProbeCapture(){
         SkyComponent& sky = skys->getComponentFromIndex(0);
         if (sky.visible){
             updateSkyViewProjection(sky, captureCamera);
-            drawSky(sky, true, true);
+            drawSky(sky, PIP_RTT_INVERT);
         }
     }
 
@@ -1455,7 +1472,7 @@ void RenderSystem::renderReflectionProbeCapture(){
         InstancedMeshComponent* instanced = scene->findComponent<InstancedMeshComponent>(entity);
         TerrainComponent* terrain = scene->findComponent<TerrainComponent>(entity);
         TilemapComponent* tilemap = scene->findComponent<TilemapComponent>(entity);
-        drawMesh(*mesh, transform, captureCamera, captureTransform, true, instanced, terrain, tilemap, 0);
+        drawMesh(*mesh, transform, captureCamera, captureTransform, PIP_RTT_INVERT, instanced, terrain, tilemap, 0);
     }
 
     runtime.capturePass.endRenderPass();
@@ -3067,7 +3084,7 @@ void RenderSystem::updateTerrainNodesBuffer(TerrainComponent& terrain, int viewI
     terrain.views[viewIndex].needUpdateNodesBuffer = false;
 }
 
-bool RenderSystem::drawMesh(MeshComponent& mesh, Transform& transform, CameraComponent& camera, Transform& camTransform, bool renderToTexture, InstancedMeshComponent* instmesh, TerrainComponent* terrain, TilemapComponent* tilemap, int terrainView){
+bool RenderSystem::drawMesh(MeshComponent& mesh, Transform& transform, CameraComponent& camera, Transform& camTransform, PipelineType pipType, InstancedMeshComponent* instmesh, TerrainComponent* terrain, TilemapComponent* tilemap, int terrainView){
     if (mesh.loaded && !mesh.needReload){
 
         if (terrain && terrain->needUpdateTexture){
@@ -3125,11 +3142,6 @@ bool RenderSystem::drawMesh(MeshComponent& mesh, Transform& transform, CameraCom
                 }
             }
 
-            PipelineType pipType = PIP_DEFAULT;
-            if (renderToTexture){
-                // reflection cameras flip winding to keep front faces visible
-                pipType = camera.invertCulling ? PIP_RTT_INVERT : PIP_RTT;
-            }
             if (!render.beginDraw(pipType)){
                 mesh.needReload = true;
                 return false;
@@ -4561,7 +4573,7 @@ bool RenderSystem::loadUI(Entity entity, UIComponent& ui, uint8_t pipelines, boo
     return true;
 }
 
-bool RenderSystem::drawUI(UIComponent& ui, Transform& transform, bool renderToTexture){
+bool RenderSystem::drawUI(UIComponent& ui, Transform& transform, PipelineType pipType){
     if (ui.loaded && ui.buffer.getSize() > 0){
 
         if (ui.needUpdateTexture || ui.texture.isFramebufferOutdated()){
@@ -4588,7 +4600,7 @@ bool RenderSystem::drawUI(UIComponent& ui, Transform& transform, bool renderToTe
 
         ObjectRender& render = ui.render;
 
-        if (!render.beginDraw((renderToTexture)?PIP_RTT:PIP_DEFAULT)){
+        if (!render.beginDraw(pipType)){
             ui.needReload = true;
             return false;
         }
@@ -4841,7 +4853,7 @@ float RenderSystem::computePointsScale(const CameraComponent& camera, float view
     return viewportHeight / orthoHeight;
 }
 
-bool RenderSystem::drawPoints(PointsComponent& points, Transform& transform, CameraComponent& camera, Transform& camTransform, bool renderToTexture){
+bool RenderSystem::drawPoints(PointsComponent& points, Transform& transform, CameraComponent& camera, Transform& camTransform, PipelineType pipType){
     if (points.loaded && points.numVisible > 0){
 
         if (points.needUpdateTexture || points.texture.isFramebufferOutdated()){
@@ -4863,7 +4875,7 @@ bool RenderSystem::drawPoints(PointsComponent& points, Transform& transform, Cam
 
         ObjectRender& render = points.render;
 
-        if (!render.beginDraw((renderToTexture)?PIP_RTT:PIP_DEFAULT)){
+        if (!render.beginDraw(pipType)){
             points.needReload = true;
             return false;
         }
@@ -4907,7 +4919,7 @@ void RenderSystem::destroyPoints(Entity entity, PointsComponent& points){
     SystemRender::addQueueCommand(&changeDestroy, new check_load_t{scene, entity});
 }
 
-bool RenderSystem::drawLines(LinesComponent& lines, Transform& transform, Transform& camTransform, bool renderToTexture){
+bool RenderSystem::drawLines(LinesComponent& lines, Transform& transform, Transform& camTransform, PipelineType pipType){
     if (lines.loaded && lines.lines.size() > 0){
 
         if (lines.needUpdateBuffer){
@@ -4919,7 +4931,7 @@ bool RenderSystem::drawLines(LinesComponent& lines, Transform& transform, Transf
 
         ObjectRender& render = lines.render;
 
-        if (!render.beginDraw((renderToTexture)?PIP_RTT:PIP_DEFAULT)){
+        if (!render.beginDraw(pipType)){
             lines.needReload = true;
             return false;
         }
@@ -5061,7 +5073,7 @@ bool RenderSystem::loadSky(Entity entity, SkyComponent& sky, uint8_t pipelines){
     return true;
 }
 
-bool RenderSystem::drawSky(SkyComponent& sky, bool renderToTexture, bool invertCulling){
+bool RenderSystem::drawSky(SkyComponent& sky, PipelineType pipType){
     if (sky.loaded){
 
         if (sky.needUpdateTexture || sky.texture.isFramebufferOutdated()){
@@ -5076,12 +5088,6 @@ bool RenderSystem::drawSky(SkyComponent& sky, bool renderToTexture, bool invertC
 
         ObjectRender& render = sky.render;
 
-        // a reflection pass flips handedness, so the sky cube needs reversed winding
-        // (like meshes) or back-face culling removes its inward-facing faces
-        PipelineType pipType = PIP_DEFAULT;
-        if (renderToTexture){
-            pipType = invertCulling ? PIP_RTT_INVERT : PIP_RTT;
-        }
         if (!render.beginDraw(pipType)){
             sky.needReload = true;
             return false;
@@ -6435,6 +6441,38 @@ void RenderSystem::updateMVP(size_t index, Transform& transform, CameraComponent
     transform.distanceToCamera = (cameraTransform.worldPosition - transform.worldPosition).length();
 }
 
+uint8_t RenderSystem::getScenePipelines() const{
+    uint8_t pipelines = 0;
+
+    Entity mainCameraEntity = scene->getCamera();
+    auto cameras = scene->getComponentArray<CameraComponent>();
+
+    for (int i = 0; i < cameras->size(); i++){
+        CameraComponent& camera = cameras->getComponentFromIndex(i);
+        Entity cameraEntity = cameras->getEntity(i);
+
+        // no Transform means no pass
+        if (!scene->findComponent<Transform>(cameraEntity))
+            continue;
+
+        if (cameraEntity == mainCameraEntity && !camera.renderToTexture){
+            pipelines |= camera.depthTest ? PIP_DEFAULT : PIP_DEFAULT_NODEPTH;
+        }
+
+        if (camera.renderToTexture || Engine::getFramebuffer() || isFixedResolutionActive() || swapchainRedirect){
+            pipelines |= camera.depthTest ? PIP_RTT : PIP_RTT_NODEPTH;
+        }
+    }
+
+    // mirrors and probe capture render with reversed winding (see isRenderingFlipped)
+    if (scene->getComponentArray<MirrorComponent>()->size() > 0 ||
+            scene->getComponentArray<ReflectionProbeComponent>()->size() > 0){
+        pipelines |= PIP_RTT_INVERT;
+    }
+
+    return pipelines;
+}
+
 void RenderSystem::update(double dt){
     if (paused) {
         return;
@@ -6510,7 +6548,7 @@ void RenderSystem::update(double dt){
     updateSwapchainRedirect();
 
     Entity mainCameraEntity = scene->getCamera();
-    uint8_t pipelines = 0;
+    uint8_t pipelines = getScenePipelines();
 
     hasMultipleCameras = false;
     for (int i = 0; i < cameras->size(); i++){
@@ -6563,14 +6601,6 @@ void RenderSystem::update(double dt){
             hasMultipleCameras = true;
         }
 
-        if (cameraEntity == mainCameraEntity && !camera.renderToTexture){
-            pipelines |= PIP_DEFAULT;
-        }
-
-        if (camera.renderToTexture || Engine::getFramebuffer() || isFixedResolutionActive() || swapchainRedirect){
-            pipelines |= PIP_RTT;
-        }
-
         if (cameraTransform.needUpdate){
             camera.needUpdate = true;
         }
@@ -6578,16 +6608,6 @@ void RenderSystem::update(double dt){
         if (camera.needUpdate){
             updateCamera(camera, cameraTransform);
         }
-    }
-
-    // mirrors render the scene with reversed winding (handedness flip); bake the
-    // inverted RTT pipeline for meshes only when a mirror is present
-    if (scene->getComponentArray<MirrorComponent>()->size() > 0){
-        pipelines |= PIP_RTT_INVERT;
-    }
-    if (scene->getComponentArray<ReflectionProbeComponent>()->size() > 0){
-        // probe capture renders with PIP_RTT_INVERT (see isRenderingFlipped)
-        pipelines |= PIP_RTT_INVERT;
     }
 
     // drive mirror reflection cameras from the (now updated) main camera, so the
@@ -6614,6 +6634,12 @@ void RenderSystem::update(double dt){
         mainCamera.needUpdate = true;
     }
     lastMultiCameraDraw = multiCameraDraw;
+
+    // the batch order is baked into the shared render arrays, so a mode change has to
+    // rebuild them from the authored instances and points
+    bool batchSort = sortsByDistance(mainCamera);
+    bool batchSortChanged = batchSort != lastBatchSort;
+    lastBatchSort = batchSort;
 
     // the destination is baked into the pipelines at load, so a scene entering or
     // leaving a stack (or fixed resolution switching) has to reload with the new set
@@ -6692,24 +6718,24 @@ void RenderSystem::update(double dt){
                         (inverseModel * fadeEyePosition) : fadeEyePosition;
                 }
 
-                bool sortTransparentInstances = mesh.transparent && mainCamera.type != CameraType::CAMERA_UI;
+                bool sortTransparentInstances = mesh.transparent && batchSort;
 
-                bool instancesNeedUpdate = instmesh->needUpdateInstances || mesh.needUpdateAABB;
+                bool instancesNeedUpdate = instmesh->needUpdateInstances || mesh.needUpdateAABB || batchSortChanged;
 
                 if (instancesNeedUpdate && !instmesh->instancedBillboard){
                     updateInstancedMesh(*instmesh, mesh, transform, mainCamera, mainCameraTransform);
                 }
 
                 if (instancesNeedUpdate || ((mainCamera.needUpdate || transform.needUpdate) && sortTransparentInstances)){
-                    // Sort/upload transparent instances once here for the main camera.
-                    // The instance buffer is shared by every camera and sokol only allows
-                    // one sg_update_buffer per buffer per frame (VALIDATE_UPDATEBUF_ONCE),
-                    // so render-to-texture cameras reuse this ordering instead of
-                    // re-sorting per camera (which would upload the buffer again).
+                    // The instance buffer is shared by every camera and sokol allows one
+                    // sg_update_buffer per frame (VALIDATE_UPDATEBUF_ONCE), so the main camera
+                    // fixes the batch order and every other camera reuses it.
                     if (instmesh->instancedBillboard){
                         updateInstancedMesh(*instmesh, mesh, transform, mainCamera, mainCameraTransform);
                     }
-                    sortInstancedMesh(*instmesh, mesh, transform, mainCamera, mainCameraTransform);
+                    if (sortTransparentInstances){
+                        sortInstancedMesh(*instmesh, mesh, transform, mainCamera, mainCameraTransform);
+                    }
                 }
 
                 instmesh->needUpdateInstances = false;
@@ -6889,16 +6915,19 @@ void RenderSystem::update(double dt){
                 loadPoints(entity, points, pipelines);
             }
 
-            bool sortTransparentPoints = points.transparent && mainCamera.type != CameraType::CAMERA_UI;
+            bool sortTransparentPoints = points.transparent && batchSort;
+
+            if (batchSortChanged){
+                points.needUpdate = true;
+            }
 
             if (points.needUpdate){
                 updatePoints(points, transform, mainCamera, mainCameraTransform);
             }
 
-            // Sort/upload transparent points once here for the main camera. The points
-            // buffer is shared by every camera and sokol only allows one sg_update_buffer
-            // per buffer per frame (VALIDATE_UPDATEBUF_ONCE), so render-to-texture cameras
-            // reuse this ordering instead of re-sorting per camera.
+            // Sort/upload transparent points once here for the main camera: the buffer is
+            // shared by every camera and sokol only allows one sg_update_buffer per frame
+            // (VALIDATE_UPDATEBUF_ONCE), so every other camera reuses this order.
             if (sortTransparentPoints && (points.needUpdate || mainCamera.needUpdate || transform.needUpdate)){
                 sortPoints(points, transform, mainCamera, mainCameraTransform);
             }
@@ -7344,6 +7373,8 @@ void RenderSystem::draw(){
         // whether this camera's color pass targets an offscreen framebuffer
         // (selects PIP_RTT pipelines and flipped rendering on GL)
         bool offscreenTarget = camera.renderToTexture || Engine::getFramebuffer() || useFixedRes || useSSR || usePostProcess;
+        PipelineType colorPip = colorPipeline(camera, offscreenTarget);
+        bool distanceSort = sortsByDistance(camera);
 
         if (Engine::getMainScene() == scene || camera.renderToTexture){
             camera.render.setClearColor(scene->getBackgroundColor());
@@ -7429,7 +7460,7 @@ void RenderSystem::draw(){
                     updateSkyViewProjection(sky, camera);
                 }
 
-                drawSky(sky, offscreenTarget, camera.invertCulling);
+                drawSky(sky, colorPip);
             }
         }
 
@@ -7526,9 +7557,9 @@ void RenderSystem::draw(){
                     // ones refreshed in update()
                     TilemapComponent* tilemap = scene->findComponent<TilemapComponent>(entity);
 
-                    if (!mesh.transparent || !camera.transparentSort){
+                    if (!mesh.transparent || !distanceSort){
                         //Draw opaque meshes if transparency is not necessary
-                        drawMesh(mesh, transform, camera, cameraTransform, offscreenTarget, instmesh, terrain, tilemap, terrainView);
+                        drawMesh(mesh, transform, camera, cameraTransform, colorPip, instmesh, terrain, tilemap, terrainView);
                     }else{
                         transparentRenders.push({TransparentRenderType::MESH, &mesh, nullptr, instmesh, terrain, tilemap, &transform, transform.distanceToCamera});
                     }
@@ -7542,7 +7573,7 @@ void RenderSystem::draw(){
                     isText = true;
                 }
                 if (transform.visible && !samplesCameraTarget(camera, ui.texture))
-                    drawUI(ui, transform, offscreenTarget);
+                    drawUI(ui, transform, colorPip);
 
             }else if (signature.test(scene->getComponentId<PointsComponent>())){
                 PointsComponent& points = scene->getComponent<PointsComponent>(entity);
@@ -7552,8 +7583,8 @@ void RenderSystem::draw(){
                 // buffer per frame (VALIDATE_UPDATEBUF_ONCE). Every camera reuses the main
                 // camera's ordering computed in update().
                 if (transform.visible && !samplesCameraTarget(camera, points.texture)){
-                    if (!points.transparent || !camera.transparentSort){
-                        drawPoints(points, transform, camera, cameraTransform, offscreenTarget);
+                    if (!points.transparent || !distanceSort){
+                        drawPoints(points, transform, camera, cameraTransform, colorPip);
                     }else{
                         transparentRenders.push({TransparentRenderType::POINTS, nullptr, &points, nullptr, nullptr, nullptr, &transform, transform.distanceToCamera});
                     }
@@ -7563,7 +7594,7 @@ void RenderSystem::draw(){
                 LinesComponent& lines = scene->getComponent<LinesComponent>(entity);
 
                 if (transform.visible)
-                    drawLines(lines, transform, cameraTransform, offscreenTarget);
+                    drawLines(lines, transform, cameraTransform, colorPip);
 
             }
 
@@ -7579,9 +7610,9 @@ void RenderSystem::draw(){
             TransparentRenderData renderData = transparentRenders.top();
 
             if (renderData.type == TransparentRenderType::MESH){
-                drawMesh(*renderData.mesh, *renderData.transform, camera, cameraTransform, offscreenTarget, renderData.instmesh, renderData.terrain, renderData.tilemap, terrainView);
+                drawMesh(*renderData.mesh, *renderData.transform, camera, cameraTransform, colorPip, renderData.instmesh, renderData.terrain, renderData.tilemap, terrainView);
             }else if (renderData.type == TransparentRenderType::POINTS){
-                drawPoints(*renderData.points, *renderData.transform, camera, cameraTransform, offscreenTarget);
+                drawPoints(*renderData.points, *renderData.transform, camera, cameraTransform, colorPip);
             }
 
             transparentRenders.pop();

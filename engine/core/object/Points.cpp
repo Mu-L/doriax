@@ -19,7 +19,8 @@ Points::~Points(){
 bool Points::load(){
     PointsComponent& pointscomp = getComponent<PointsComponent>();
 
-    return scene->getSystem<RenderSystem>()->loadPoints(entity, pointscomp, PIP_DEFAULT | PIP_RTT);
+    auto renderSystem = scene->getSystem<RenderSystem>();
+    return renderSystem->loadPoints(entity, pointscomp, renderSystem->getScenePipelines());
 }
 
 void Points::setMaxPoints(unsigned int maxPoints){

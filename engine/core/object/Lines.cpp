@@ -20,7 +20,8 @@ Lines::~Lines(){
 bool Lines::load(){
     LinesComponent& linescomp = getComponent<LinesComponent>();
 
-    return scene->getSystem<RenderSystem>()->loadLines(entity, linescomp, PIP_DEFAULT | PIP_RTT);
+    auto renderSystem = scene->getSystem<RenderSystem>();
+    return renderSystem->loadLines(entity, linescomp, renderSystem->getScenePipelines());
 }
 
 void Lines::setMaxLines(unsigned int maxLines){

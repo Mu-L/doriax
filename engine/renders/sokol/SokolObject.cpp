@@ -12,6 +12,24 @@
 
 using namespace doriax;
 
+namespace {
+    sg_pipeline makePipeline(const sg_pipeline_desc& desc){
+        if (Engine::isAsyncThread())
+            return SokolCmdQueue::add_command_make_pipeline(desc);
+        return sg_make_pipeline(desc);
+    }
+
+    void destroyPipeline(sg_pipeline pipeline){
+        if (pipeline.id == SG_INVALID_ID)
+            return;
+        if (Engine::isAsyncThread()){
+            SokolCmdQueue::add_command_destroy_pipeline(pipeline);
+        }else{
+            sg_destroy_pipeline(pipeline);
+        }
+    }
+}
+
 SokolObject::SokolObject(){
     pip.id = SG_INVALID_ID;
     depth_pip.id = SG_INVALID_ID;
@@ -19,6 +37,8 @@ SokolObject::SokolObject(){
     rtt_pip.id = SG_INVALID_ID;
     rtt_invert_pip.id = SG_INVALID_ID;
     gbuffer_pip.id = SG_INVALID_ID;
+    nodepth_pip.id = SG_INVALID_ID;
+    rtt_nodepth_pip.id = SG_INVALID_ID;
     bind = {};
     pipeline_desc = {};
     bindSlotIndex = 0;
@@ -32,6 +52,8 @@ SokolObject::SokolObject(const SokolObject& rhs) {
     rtt_pip = rhs.rtt_pip;
     rtt_invert_pip = rhs.rtt_invert_pip;
     gbuffer_pip = rhs.gbuffer_pip;
+    nodepth_pip = rhs.nodepth_pip;
+    rtt_nodepth_pip = rhs.rtt_nodepth_pip;
     pipeline_desc = rhs.pipeline_desc;
     bindSlotIndex = rhs.bindSlotIndex;
     bufferToBindSlot = rhs.bufferToBindSlot;
@@ -45,6 +67,8 @@ SokolObject& SokolObject::operator=(const SokolObject& rhs) {
     rtt_pip = rhs.rtt_pip;
     rtt_invert_pip = rhs.rtt_invert_pip;
     gbuffer_pip = rhs.gbuffer_pip;
+    nodepth_pip = rhs.nodepth_pip;
+    rtt_nodepth_pip = rhs.rtt_nodepth_pip;
     pipeline_desc = rhs.pipeline_desc;
     bindSlotIndex = rhs.bindSlotIndex;
     bufferToBindSlot = rhs.bufferToBindSlot;
@@ -245,12 +269,7 @@ bool SokolObject::endLoad(uint8_t pipelines, bool enableFaceCulling, bool enable
         pip_depth_desc.depth.write_enabled = true;
         pip_depth_desc.colors[0].pixel_format = SG_PIXELFORMAT_RGBA8;
 
-        if (Engine::isAsyncThread()){
-            depth_pip = SokolCmdQueue::add_command_make_pipeline(pip_depth_desc);
-        }else{
-            depth_pip = sg_make_pipeline(pip_depth_desc);
-        }
-
+        depth_pip = makePipeline(pip_depth_desc);
         if (depth_pip.id == SG_INVALID_ID){
             return false;
         }
@@ -273,12 +292,7 @@ bool SokolObject::endLoad(uint8_t pipelines, bool enableFaceCulling, bool enable
         pip_shadow_depth_desc.color_count = 0;
         pip_shadow_depth_desc.colors[0].pixel_format = SG_PIXELFORMAT_NONE;
 
-        if (Engine::isAsyncThread()){
-            shadow_depth_pip = SokolCmdQueue::add_command_make_pipeline(pip_shadow_depth_desc);
-        }else{
-            shadow_depth_pip = sg_make_pipeline(pip_shadow_depth_desc);
-        }
-
+        shadow_depth_pip = makePipeline(pip_shadow_depth_desc);
         if (shadow_depth_pip.id == SG_INVALID_ID){
             return false;
         }
@@ -305,18 +319,13 @@ bool SokolObject::endLoad(uint8_t pipelines, bool enableFaceCulling, bool enable
         pip_gbuffer_desc.colors[1].pixel_format = SG_PIXELFORMAT_RGBA8;
         pip_gbuffer_desc.colors[2].pixel_format = SG_PIXELFORMAT_RGBA8;
 
-        if (Engine::isAsyncThread()){
-            gbuffer_pip = SokolCmdQueue::add_command_make_pipeline(pip_gbuffer_desc);
-        }else{
-            gbuffer_pip = sg_make_pipeline(pip_gbuffer_desc);
-        }
-
+        gbuffer_pip = makePipeline(pip_gbuffer_desc);
         if (gbuffer_pip.id == SG_INVALID_ID){
             return false;
         }
     }
 
-    if (pipelines & (int)PipelineType::PIP_DEFAULT) {
+    if (pipelines & ((int)PipelineType::PIP_DEFAULT | (int)PipelineType::PIP_DEFAULT_NODEPTH)) {
         sg_pipeline_desc pip_default_desc = pipeline_desc;
 
         if (enableFaceCulling){
@@ -324,28 +333,36 @@ bool SokolObject::endLoad(uint8_t pipelines, bool enableFaceCulling, bool enable
             pip_default_desc.face_winding = getFaceWinding(windingOrder);
         }
 
-        pip_default_desc.depth.write_enabled = enableDepthWrite;
-        pip_default_desc.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
-
         pip_default_desc.colors[0].write_mask = SG_COLORMASK_RGB;
         pip_default_desc.colors[0].blend.enabled = true;
         pip_default_desc.colors[0].blend.src_factor_rgb = SG_BLENDFACTOR_SRC_ALPHA;
         pip_default_desc.colors[0].blend.dst_factor_rgb = SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
 
-        if (Engine::isAsyncThread()){
-            pip = SokolCmdQueue::add_command_make_pipeline(pip_default_desc);
-        }else{
-            pip = sg_make_pipeline(pip_default_desc);
+        if (pipelines & (int)PipelineType::PIP_DEFAULT){
+            pip_default_desc.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
+            pip_default_desc.depth.write_enabled = enableDepthWrite;
+
+            pip = makePipeline(pip_default_desc);
+            if (pip.id == SG_INVALID_ID){
+                return false;
+            }
         }
 
-        if (pip.id == SG_INVALID_ID){
-            return false;
+        if (pipelines & (int)PipelineType::PIP_DEFAULT_NODEPTH){
+            pip_default_desc.depth.compare = SG_COMPAREFUNC_ALWAYS;
+            pip_default_desc.depth.write_enabled = false;
+
+            nodepth_pip = makePipeline(pip_default_desc);
+            if (nodepth_pip.id == SG_INVALID_ID){
+                return false;
+            }
         }
     }
 
-    // PIP_RTT (offscreen) and PIP_RTT_INVERT (planar reflection) share an identical
-    // pipeline except for triangle winding, so build the common desc once.
-    if (pipelines & ((int)PipelineType::PIP_RTT | (int)PipelineType::PIP_RTT_INVERT)){
+    // PIP_RTT (offscreen), PIP_RTT_INVERT (planar reflection) and PIP_RTT_NODEPTH share
+    // an identical pipeline except for winding and depth state, so build the desc once.
+    if (pipelines & ((int)PipelineType::PIP_RTT | (int)PipelineType::PIP_RTT_INVERT |
+            (int)PipelineType::PIP_RTT_NODEPTH)){
         sg_pipeline_desc pip_rtt_desc = pipeline_desc;
 
         pip_rtt_desc.sample_count = 1;
@@ -368,18 +385,23 @@ bool SokolObject::endLoad(uint8_t pipelines, bool enableFaceCulling, bool enable
         }
         if (enableFaceCulling){
             pip_rtt_desc.cull_mode = getCullMode(cullingMode);
+            pip_rtt_desc.face_winding = getFaceWinding(rttWinding);
         }
 
         if (pipelines & (int)PipelineType::PIP_RTT){
-            if (enableFaceCulling){
-                pip_rtt_desc.face_winding = getFaceWinding(rttWinding);
-            }
-            if (Engine::isAsyncThread()){
-                rtt_pip = SokolCmdQueue::add_command_make_pipeline(pip_rtt_desc);
-            }else{
-                rtt_pip = sg_make_pipeline(pip_rtt_desc);
-            }
+            rtt_pip = makePipeline(pip_rtt_desc);
             if (rtt_pip.id == SG_INVALID_ID){
+                return false;
+            }
+        }
+
+        if (pipelines & (int)PipelineType::PIP_RTT_NODEPTH){
+            sg_pipeline_desc pip_rtt_nodepth_desc = pip_rtt_desc;
+            pip_rtt_nodepth_desc.depth.compare = SG_COMPAREFUNC_ALWAYS;
+            pip_rtt_nodepth_desc.depth.write_enabled = false;
+
+            rtt_nodepth_pip = makePipeline(pip_rtt_nodepth_desc);
+            if (rtt_nodepth_pip.id == SG_INVALID_ID){
                 return false;
             }
         }
@@ -390,11 +412,7 @@ bool SokolObject::endLoad(uint8_t pipelines, bool enableFaceCulling, bool enable
                 WindingOrder invWinding = (rttWinding == WindingOrder::CCW) ? WindingOrder::CW : WindingOrder::CCW;
                 pip_rtt_desc.face_winding = getFaceWinding(invWinding);
             }
-            if (Engine::isAsyncThread()){
-                rtt_invert_pip = SokolCmdQueue::add_command_make_pipeline(pip_rtt_desc);
-            }else{
-                rtt_invert_pip = sg_make_pipeline(pip_rtt_desc);
-            }
+            rtt_invert_pip = makePipeline(pip_rtt_desc);
             if (rtt_invert_pip.id == SG_INVALID_ID){
                 return false;
             }
@@ -416,6 +434,10 @@ bool SokolObject::beginDraw(PipelineType pipType){
         selectedPipeline = rtt_pip;
     }else if (pipType == PipelineType::PIP_RTT_INVERT){
         selectedPipeline = rtt_invert_pip;
+    }else if (pipType == PipelineType::PIP_DEFAULT_NODEPTH){
+        selectedPipeline = nodepth_pip;
+    }else if (pipType == PipelineType::PIP_RTT_NODEPTH){
+        selectedPipeline = rtt_nodepth_pip;
     }
 
     // Deferred resource creation can leave an allocated handle in FAILED state.
@@ -445,48 +467,14 @@ void SokolObject::draw(unsigned int baseElement, unsigned int vertexCount, unsig
 
 void SokolObject::destroy(){
     if (sg_isvalid()){
-        if (pip.id != SG_INVALID_ID){
-            if (Engine::isAsyncThread()){
-                SokolCmdQueue::add_command_destroy_pipeline(pip);
-            }else{
-                sg_destroy_pipeline(pip);
-            }
-        }
-        if (depth_pip.id != SG_INVALID_ID){
-            if (Engine::isAsyncThread()){
-                SokolCmdQueue::add_command_destroy_pipeline(depth_pip);
-            }else{
-                sg_destroy_pipeline(depth_pip);
-            }
-        }
-        if (shadow_depth_pip.id != SG_INVALID_ID){
-            if (Engine::isAsyncThread()){
-                SokolCmdQueue::add_command_destroy_pipeline(shadow_depth_pip);
-            }else{
-                sg_destroy_pipeline(shadow_depth_pip);
-            }
-        }
-        if (rtt_pip.id != SG_INVALID_ID){
-            if (Engine::isAsyncThread()){
-                SokolCmdQueue::add_command_destroy_pipeline(rtt_pip);
-            }else{
-                sg_destroy_pipeline(rtt_pip);
-            }
-        }
-        if (rtt_invert_pip.id != SG_INVALID_ID){
-            if (Engine::isAsyncThread()){
-                SokolCmdQueue::add_command_destroy_pipeline(rtt_invert_pip);
-            }else{
-                sg_destroy_pipeline(rtt_invert_pip);
-            }
-        }
-        if (gbuffer_pip.id != SG_INVALID_ID){
-            if (Engine::isAsyncThread()){
-                SokolCmdQueue::add_command_destroy_pipeline(gbuffer_pip);
-            }else{
-                sg_destroy_pipeline(gbuffer_pip);
-            }
-        }
+        destroyPipeline(pip);
+        destroyPipeline(depth_pip);
+        destroyPipeline(shadow_depth_pip);
+        destroyPipeline(rtt_pip);
+        destroyPipeline(rtt_invert_pip);
+        destroyPipeline(gbuffer_pip);
+        destroyPipeline(nodepth_pip);
+        destroyPipeline(rtt_nodepth_pip);
     }
 
     pip.id = SG_INVALID_ID;
@@ -495,6 +483,8 @@ void SokolObject::destroy(){
     rtt_pip.id = SG_INVALID_ID;
     rtt_invert_pip.id = SG_INVALID_ID;
     gbuffer_pip.id = SG_INVALID_ID;
+    nodepth_pip.id = SG_INVALID_ID;
+    rtt_nodepth_pip.id = SG_INVALID_ID;
     bind = {};
     pipeline_desc = {};
     bindSlotIndex = 0;

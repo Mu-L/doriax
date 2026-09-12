@@ -273,6 +273,7 @@ void LuaBinding::registerObjectClasses(lua_State *L){
         .addFunction("setFramebufferSize", &Camera::setFramebufferSize)
         .addFunction("setFramebufferFilter", &Camera::setFramebufferFilter)
         .addProperty("transparentSort", &Camera::isTransparentSort, &Camera::setTransparentSort)
+        .addProperty("depthTest", &Camera::isDepthTest, &Camera::setDepthTest)
         .addFunction("screenToRay", &Camera::screenToRay)
         .addFunction("getDistanceFromTarget", &Camera::getDistanceFromTarget)
         .addFunction("updateCamera", &Camera::updateCamera)

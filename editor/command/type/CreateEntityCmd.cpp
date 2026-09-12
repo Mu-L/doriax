@@ -570,6 +570,7 @@ bool editor::CreateEntityCmd::execute(){
             camera.nearClip = DEFAULT_ORTHO_NEAR;
             camera.farClip = DEFAULT_ORTHO_FAR;
             camera.transparentSort = false;
+            camera.depthTest = false;
 
             Transform& cameratransform = scene->getComponent<Transform>(entity);
             cameratransform.position = Vector3(0.0f, 0.0f, 1.0f);

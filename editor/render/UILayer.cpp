@@ -118,6 +118,7 @@ editor::UILayer::UILayer(bool enable3DOverlays){
     updateRect(Vector2::ZERO, Vector2::ZERO);
     
     camera->setType(CameraType::CAMERA_UI);
+    camera->setDepthTest(false);
 
     if (enable3DOverlays){
         viewGizmoImage = new Image(scene);

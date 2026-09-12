@@ -6961,6 +6961,7 @@ void editor::Properties::drawCameraComponent(ComponentType cpType, SceneProject*
 
     //propertyRow(RowPropertyType::Bool, cpType, "renderToTexture", "Render To Texture", sceneProject, entities, defaultSettings);
     //propertyRow(RowPropertyType::Bool, cpType, "transparentSort", "Transparent Sort", sceneProject, entities, defaultSettings);
+    propertyRow(RowPropertyType::Bool, cpType, "depthTest", "Depth Test", sceneProject, entities, defaultSettings);
     propertyRow(RowPropertyType::Bool, cpType, "autoResize", "Auto Resize", sceneProject, entities, defaultSettings);
 
     if (entities.size() == 1 && sceneProject->sceneRender && sceneWindow) {

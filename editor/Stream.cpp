@@ -5736,6 +5736,7 @@ YAML::Node editor::Stream::encodeCameraComponent(const CameraComponent& camera) 
     encodeFinite(node, "farClip", camera.farClip);
     node["renderToTexture"] = camera.renderToTexture;
     node["transparentSort"] = camera.transparentSort;
+    node["depthTest"] = camera.depthTest;
     node["useTarget"] = camera.useTarget;
     node["autoResize"] = camera.autoResize;
     node["framebufferWidth"] = camera.framebufferWidth;
@@ -5766,6 +5767,7 @@ CameraComponent editor::Stream::decodeCameraComponent(const YAML::Node& node, co
     camera.farClip = decodeFinite(node["farClip"], camera.farClip);
     if (node["renderToTexture"]) camera.renderToTexture = node["renderToTexture"].as<bool>();
     if (node["transparentSort"]) camera.transparentSort = node["transparentSort"].as<bool>();
+    if (node["depthTest"]) camera.depthTest = node["depthTest"].as<bool>();
     if (node["useTarget"]) camera.useTarget = node["useTarget"].as<bool>();
     if (node["autoResize"]) camera.autoResize = node["autoResize"].as<bool>();
     if (node["framebufferWidth"]) camera.framebufferWidth = node["framebufferWidth"].as<unsigned int>();

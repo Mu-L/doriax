@@ -241,6 +241,8 @@ namespace doriax{
 		// extra cameras the last frame drew, to catch the switch back to main only
 		bool lastMultiCameraDraw;
 		bool capturingReflectionProbe;
+		// batch order currently baked into the shared points/instance arrays
+		bool lastBatchSort;
 		// pipelines the objects were loaded with, to catch a destination change
 		uint8_t loadedPipelines;
 
@@ -506,7 +508,7 @@ namespace doriax{
 
 		void updateMeshBuffers(MeshComponent& mesh);
 		void updateTerrainNodesBuffer(TerrainComponent& terrain, int viewIndex);
-		bool drawMesh(MeshComponent& mesh, Transform& transform, CameraComponent& camera, Transform& camTransform, bool renderToTexture, InstancedMeshComponent* instmesh, TerrainComponent* terrain, TilemapComponent* tilemap, int terrainView = 0);
+		bool drawMesh(MeshComponent& mesh, Transform& transform, CameraComponent& camera, Transform& camTransform, PipelineType pipType, InstancedMeshComponent* instmesh, TerrainComponent* terrain, TilemapComponent* tilemap, int terrainView = 0);
 		bool drawMeshDepth(MeshComponent& mesh, const float cameraFar, const Plane frustumPlanes[6], vs_depth_t vsDepthParams, InstancedMeshComponent* instmesh, TerrainComponent* terrain, TilemapComponent* tilemap, bool forSSAO = false, PipelineType pipelineType = PIP_DEPTH);
 		void destroyMesh(Entity entity, MeshComponent& mesh, bool clearAssets = false);
 
@@ -547,18 +549,18 @@ namespace doriax{
 		// runs the chain from ping-pong buffer 0 into destination (swapchain when null)
 		void renderPostProcess(FramebufferRender* destination);
 
-		bool drawUI(UIComponent& ui, Transform& transform, bool renderToTexture);
+		bool drawUI(UIComponent& ui, Transform& transform, PipelineType pipType);
 		void destroyUI(Entity entity, UIComponent& ui);
 
-		bool drawPoints(PointsComponent& points, Transform& transform, CameraComponent& camera, Transform& camTransform, bool renderToTexture);
+		bool drawPoints(PointsComponent& points, Transform& transform, CameraComponent& camera, Transform& camTransform, PipelineType pipType);
 		float getPointsViewportHeight(const CameraComponent& camera) const;
 		float computePointsScale(const CameraComponent& camera, float viewportHeight) const;
 		void destroyPoints(Entity entity, PointsComponent& points);
 
-		bool drawLines(LinesComponent& lines, Transform& transform, Transform& camTransform, bool renderToTexture);
+		bool drawLines(LinesComponent& lines, Transform& transform, Transform& camTransform, PipelineType pipType);
 		void destroyLines(Entity entity, LinesComponent& lines);
 
-		bool drawSky(SkyComponent& sky, bool renderToTexture, bool invertCulling);
+		bool drawSky(SkyComponent& sky, PipelineType pipType);
 		void destroySky(Entity entity, SkyComponent& sky);
 
 		void destroyLight(LightComponent& light);
@@ -590,6 +592,9 @@ namespace doriax{
 
 		// copies the stacked scene composite to the swapchain (Engine::endCompositeFramebuffer)
 		void presentFramebufferToSwapchain(Framebuffer* source);
+
+		// pipelines this scene's cameras need; objects reload when it changes
+		uint8_t getScenePipelines() const;
 
 		bool loadMesh(Entity entity, MeshComponent& mesh, uint8_t pipelines, InstancedMeshComponent* instmesh, TerrainComponent* terrain);
 		bool loadPoints(Entity entity, PointsComponent& points, uint8_t pipelines);

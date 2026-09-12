@@ -1592,6 +1592,7 @@ Entity editor::Project::createDefaultCamera(SceneType type, Scene* scene) const 
 
     CameraComponent& camera = scene->getComponent<CameraComponent>(defaultCamera);
     camera.transparentSort = false;
+    camera.depthTest = false;
 
     switch (type) {
         case SceneType::SCENE_UI:

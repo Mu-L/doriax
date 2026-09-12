@@ -1437,6 +1437,7 @@ std::string editor::Factory::createCameraComponent(int indentSpaces, EntityRegis
     code << ind << "camera.farClip = " << formatFloat(camera.farClip) << ";\n";
     code << ind << "camera.renderToTexture = " << formatBool(camera.renderToTexture) << ";\n";
     code << ind << "camera.transparentSort = " << formatBool(camera.transparentSort) << ";\n";
+    code << ind << "camera.depthTest = " << formatBool(camera.depthTest) << ";\n";
     code << ind << "camera.useTarget = " << formatBool(camera.useTarget) << ";\n";
     code << ind << "camera.autoResize = " << formatBool(camera.autoResize) << ";\n";
     code << ind << "camera.framebufferWidth = " << formatUInt(camera.framebufferWidth) << ";\n";

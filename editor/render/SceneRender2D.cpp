@@ -23,6 +23,7 @@ editor::SceneRender2D::SceneRender2D(Scene* scene, unsigned int width, unsigned 
     camera->setNearClip(-10000.0f);
     camera->setFarClip(10000.0f);
     camera->setTransparentSort(false);
+    camera->setDepthTest(false);
 
     camera->slide(-50);
     camera->slideUp(-50);
