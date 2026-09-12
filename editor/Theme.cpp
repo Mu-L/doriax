@@ -14,6 +14,8 @@ float g_appliedDpiScale = 0.0f;
 }
 
 ImVec4 doriax::editor::Theme::Colors::ButtonActivated;
+ImVec4 doriax::editor::Theme::Colors::IconButtonHovered;
+ImVec4 doriax::editor::Theme::Colors::IconButtonActive;
 ImVec4 doriax::editor::Theme::Colors::FileCardBackground;
 ImVec4 doriax::editor::Theme::Colors::FileCardBackgroundHovered;
 ImVec4 doriax::editor::Theme::Colors::SubtleText;
@@ -94,6 +96,8 @@ void doriax::editor::Theme::apply() {
     colors[ImGuiCol_CheckboxSelectedBg]         = colors[ImGuiCol_FrameBg];
 
     Colors::ButtonActivated = ImLerp(colors[ImGuiCol_Button], colors[ImGuiCol_NavHighlight], 0.4f);
+    Colors::IconButtonHovered = ImVec4(0.2f, 0.2f, 0.2f, 0.5f);
+    Colors::IconButtonActive = ImVec4(0.3f, 0.3f, 0.3f, 0.5f);
     Colors::FileCardBackground = ImLerp(colors[ImGuiCol_WindowBg], colors[ImGuiCol_FrameBg], 0.5f);
     Colors::FileCardBackgroundHovered = ImLerp(colors[ImGuiCol_WindowBg], colors[ImGuiCol_HeaderHovered], 0.25f);
     Colors::SubtleText = ImLerp(colors[ImGuiCol_Text], colors[ImGuiCol_NavHighlight], 0.4f);

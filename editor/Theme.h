@@ -11,6 +11,9 @@ namespace doriax::editor {
     public:
         struct Colors {
             static ImVec4 ButtonActivated;
+            // Hover/press tint for transparent icon buttons (find close, replace toggle).
+            static ImVec4 IconButtonHovered;
+            static ImVec4 IconButtonActive;
             static ImVec4 FileCardBackground;
             static ImVec4 FileCardBackgroundHovered;
             static ImVec4 SubtleText;

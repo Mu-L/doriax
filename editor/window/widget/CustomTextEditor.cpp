@@ -3724,25 +3724,20 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
 
         bool focusInput = ImGui::IsWindowAppearing();
 
-        // Toggle replace
+        // Toggle replace — match find-field height so SameLine keeps the icon centered.
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.2f, 0.2f, 0.5f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.3f, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::Colors::IconButtonHovered);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::Colors::IconButtonActive);
 
-        // Align arrow vertically with the input box
-        const float chevronSize = Theme::dpi(16.0f);
-        float currentY = ImGui::GetCursorPosY();
-        ImGui::SetCursorPosY(currentY + (controlHeight - chevronSize) * 0.5f);
-
-        if (ImGui::Button(showReplaceInput ? ICON_FA_CHEVRON_DOWN "##ToggleReplace" : ICON_FA_CHEVRON_RIGHT "##ToggleReplace", ImVec2(chevronSize, chevronSize))) {
+        const float chevronWidth = Theme::dpi(16.0f);
+        if (ImGui::Button(showReplaceInput ? ICON_FA_CHEVRON_DOWN "##ToggleReplace" : ICON_FA_CHEVRON_RIGHT "##ToggleReplace", ImVec2(chevronWidth, controlHeight))) {
             showReplaceInput = !showReplaceInput;
         }
         ImGui::PopStyleColor(3);
         ImGui::PopStyleVar();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Toggle Replace");
 
-        ImGui::SetCursorPosY(currentY); // Restore Y position
         ImGui::SameLine();
 
         if (findRefocusInput) {
@@ -3825,9 +3820,15 @@ void CustomTextEditor::renderFindDialog(const ImVec2& editorPos, const ImVec2& e
 
         ImGui::SameLine(0.0f, 15.0f);
 
-        if (ImGui::Button(ICON_FA_XMARK "##Close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Theme::Colors::IconButtonHovered);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, Theme::Colors::IconButtonActive);
+        if (ImGui::Button(ICON_FA_XMARK "##Close", ImVec2(controlHeight, controlHeight)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             CloseFind();
         }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close (Escape)");
 
         if (showReplaceInput) {
