@@ -150,6 +150,14 @@ int DoriaxApple::getSampleCount(){
     return (int)Renderer.view.sampleCount;
 }
 
+bool DoriaxApple::isTouchDevice(){
+#if TARGET_OS_IPHONE
+    return true;
+#else
+    return false;
+#endif
+}
+
 void DoriaxApple::showVirtualKeyboard(std::wstring text){
 #if TARGET_OS_IPHONE
     [Renderer.view becomeFirstResponder];

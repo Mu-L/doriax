@@ -25,6 +25,8 @@ public:
 
     virtual int getSampleCount() override;
 
+    virtual bool isTouchDevice() override;
+
     virtual void showVirtualKeyboard(std::wstring text) override;
     virtual void hideVirtualKeyboard() override;
 

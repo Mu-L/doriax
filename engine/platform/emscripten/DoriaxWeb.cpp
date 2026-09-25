@@ -113,6 +113,13 @@ int DoriaxWeb::getSampleCount(){
     return sampleCount;
 }
 
+bool DoriaxWeb::isTouchDevice(){
+    // a finger is the primary pointer of phones and tablets, not of touch laptops
+    return EM_ASM_INT({
+        return (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 1 : 0;
+    });
+}
+
 int DoriaxWeb::init(int argc, char **argv){
 
     canvas = "#canvas";

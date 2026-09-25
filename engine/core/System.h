@@ -78,6 +78,10 @@ namespace doriax {
 
         virtual int getSampleCount();
 
+        // Touch is the main input, as on phones and tablets; a laptop with a touch
+        // screen and a mouse is not a touch device
+        virtual bool isTouchDevice();
+
         virtual void showVirtualKeyboard(std::wstring text = L"");
         virtual void hideVirtualKeyboard();
 

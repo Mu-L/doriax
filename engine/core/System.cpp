@@ -69,6 +69,10 @@ int System::getSampleCount(){
     return 1;
 }
 
+bool System::isTouchDevice(){
+    return false;
+}
+
 void System::showVirtualKeyboard(std::wstring text){
 
 }

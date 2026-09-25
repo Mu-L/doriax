@@ -75,6 +75,8 @@ public:
 
     virtual int getSampleCount() override;
 
+    virtual bool isTouchDevice() override;
+
     virtual bool isFullscreen() override;
     virtual void requestFullscreen() override;
     virtual void exitFullscreen() override;

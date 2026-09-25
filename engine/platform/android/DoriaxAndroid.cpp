@@ -38,6 +38,10 @@ int DoriaxAndroid::getScreenHeight(){
     return NativeEngine::getInstance()->getSurfHeight();
 }
 
+bool DoriaxAndroid::isTouchDevice(){
+    return true;
+}
+
 void DoriaxAndroid::showVirtualKeyboard(std::wstring text){
     NativeEngine::getInstance()->showSoftInput(text);
 }

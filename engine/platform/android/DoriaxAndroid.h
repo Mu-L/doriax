@@ -21,6 +21,8 @@ public:
     virtual int getScreenWidth() override;
     virtual int getScreenHeight() override;
 
+    virtual bool isTouchDevice() override;
+
     virtual void showVirtualKeyboard(std::wstring text) override;
     virtual void hideVirtualKeyboard() override;
 
