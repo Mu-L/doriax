@@ -834,6 +834,19 @@ void CustomTextEditor::InsertText(const std::string& text, bool allowAutoIndent)
     finalizeUndoRecord();
 }
 
+void CustomTextEditor::SetTextUndoable(const std::string& text) {
+    if (readOnly) return;
+
+    if (showParamHint) closeParamHint();
+    CloseAutoComplete();
+
+    addUndoRecord();
+    setLinesFromText(text);
+    ensureValidCursors();
+    tokenizeAll();
+    finalizeUndoRecord();
+}
+
 void CustomTextEditor::insertTextAtCursor(Cursor& cursor, const std::string& text, bool allowAutoIndent) {
     int line = cursor.position.line;
     int col = cursor.position.column;

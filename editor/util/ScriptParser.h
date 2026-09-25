@@ -17,7 +17,6 @@ namespace doriax::editor {
         // nullopt falls back to the inferred C++ type
         static std::optional<doriax::ScriptPropertyType> parseExplicitType(const std::string& typeStr, const std::string& cppType);
         static std::string removeComments(const std::string& content);
-        static std::optional<std::string> findScriptClassNameFromString(const std::string& content);
 
     public:
         // nullopt means that the file or named class could not be parsed.
@@ -27,6 +26,7 @@ namespace doriax::editor {
                                                                 const std::string& className);
         // Ambiguous headers do not produce a class name.
         static std::optional<std::string> findScriptClassName(const std::filesystem::path& scriptPath);
+        static std::optional<std::string> findScriptClassNameFromString(const std::string& content);
         static std::vector<doriax::ScriptProperty> parseScriptProperties(const std::filesystem::path& scriptPath);
         static std::vector<doriax::ScriptProperty> parseScriptPropertiesFromString(const std::string& content, const std::string& sourceName = "memory");
     };

@@ -6,6 +6,7 @@
 #include "widget/CustomTextEditor.h"
 #include "Project.h"
 #include "util/EntityPayload.h"
+#include "util/ScriptEvents.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -29,8 +30,9 @@ namespace doriax::editor {
         double lastCheckTime;
         int savedUndoIndex;
         int propertyInsertUndoIndex; // undo index after a drag-drop insertion, -1 if none pending
+        bool pendingWindowFocus; // focus the window when it is drawn next
 
-        EditorInstance() : isOpen(true), languageType(SyntaxLanguage::None), isModified(false), lastCheckTime(0.0), savedUndoIndex(0), propertyInsertUndoIndex(-1) {}
+        EditorInstance() : isOpen(true), languageType(SyntaxLanguage::None), isModified(false), lastCheckTime(0.0), savedUndoIndex(0), propertyInsertUndoIndex(-1), pendingWindowFocus(false) {}
     };
 
     class CodeEditor {
@@ -58,6 +60,11 @@ namespace doriax::editor {
         std::vector<CustomTextEditor::ProjectSymbol> newCppSymbols;
         std::atomic<bool> newSymbolsReady{false};
 
+        ScriptEventScan eventMenuScan;
+        // Added after the windows are drawn, it can open a file
+        std::string pendingEventFile;
+        size_t pendingEvent = 0;
+
         void checkFileChanges(EditorInstance& instance);
         // Drops the compiled forks of a shader source after it is written or reloaded
         void invalidateShadersForFile(const EditorInstance& instance);
@@ -83,6 +90,12 @@ namespace doriax::editor {
 
         static void applyFontZoom(int delta);
         void showSettingsButton();
+
+        // Source of a header or header of a source, empty when there is none
+        fs::path findCompanionFile(const fs::path& relPath) const;
+        void getScriptEventFiles(const EditorInstance& instance, std::vector<fs::path>& paths, std::vector<std::string>& texts) const;
+        void showEventsButton(const EditorInstance& instance);
+        void addScriptEvent(const std::string& filepath, size_t event);
 
     public:
         CodeEditor(Project* project);

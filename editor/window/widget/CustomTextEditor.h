@@ -148,6 +148,8 @@ namespace doriax::editor {
 
         // Editing operations
         void InsertText(const std::string& text, bool allowAutoIndent = true);
+        // Replaces the text as one undo step
+        void SetTextUndoable(const std::string& text);
         void DeleteSelection();
         void Backspace();
         void Delete();
@@ -187,6 +189,7 @@ namespace doriax::editor {
         void SetMatchBrackets(bool enable) { matchBrackets = enable; }
         void SetLineHeightFactor(float factor) { lineHeightFactor = factor; } // relative to the pushed ImGui font size
         void RequestFocus() { pendingFocus = true; }
+        void RequestScrollToCursor() { pendingScrollToCursor = true; }
 
         // Auto-complete
         void SetAutoComplete(bool enable) { autoComplete = enable; }

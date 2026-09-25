@@ -897,6 +897,152 @@ void editor::CodeEditor::showSettingsButton() {
     }
 }
 
+fs::path editor::CodeEditor::findCompanionFile(const fs::path& relPath) const {
+    static const std::vector<std::string> headerExtensions = {".h", ".hpp", ".hh", ".hxx"};
+    static const std::vector<std::string> sourceExtensions = {".cpp", ".cc", ".cxx"};
+
+    std::error_code ec;
+    for (const std::string& extension : Util::isHeaderFile(relPath.string()) ? sourceExtensions : headerExtensions) {
+        fs::path companion = relPath;
+        companion.replace_extension(extension);
+        if (fs::is_regular_file(resolveFilepath(companion), ec)) {
+            return companion;
+        }
+    }
+    return {};
+}
+
+// The file and its C++ header or source, with the text of their open buffers
+void editor::CodeEditor::getScriptEventFiles(const EditorInstance& instance, std::vector<fs::path>& paths, std::vector<std::string>& texts) const {
+    paths = {instance.filepath};
+    texts = {instance.editor->GetText()};
+    if (instance.languageType == SyntaxLanguage::Lua) return;
+
+    fs::path companion = findCompanionFile(instance.filepath);
+    if (companion.empty()) return;
+
+    std::string text;
+    auto it = editors.find(companion.string());
+    if (it != editors.end()) {
+        text = it->second.editor->GetText();
+    } else if (!readFile(resolveFilepath(companion), text)) {
+        return;
+    }
+    paths.push_back(companion);
+    texts.push_back(text);
+}
+
+void editor::CodeEditor::showEventsButton(const EditorInstance& instance) {
+    if (ImGui::Button(ICON_FA_BOLT)) {
+        std::vector<fs::path> paths;
+        std::vector<std::string> texts;
+        getScriptEventFiles(instance, paths, texts);
+        if (instance.languageType == SyntaxLanguage::Lua) {
+            eventMenuScan = ScriptEvents::scanLua(texts[0]);
+        } else {
+            eventMenuScan = ScriptEvents::scanCpp(texts, instance.filepath.stem().string());
+        }
+        ImGui::OpenPopup("CodeEditorEventsPopup");
+    }
+    ImGui::SetItemTooltip("Add event");
+
+    if (!ImGui::BeginPopup("CodeEditorEventsPopup")) return;
+
+    if (!eventMenuScan.error.empty()) {
+        ImGui::TextDisabled("%s", eventMenuScan.error.c_str());
+        ImGui::EndPopup();
+        return;
+    }
+
+    const bool lua = instance.languageType == SyntaxLanguage::Lua;
+    const std::vector<ScriptEvent>& events = ScriptEvents::getEvents();
+    for (const ScriptEventSourceInfo& source : ScriptEvents::getSources()) {
+        if (source.source == ScriptEventSource::UI || source.source == ScriptEventSource::Physics2D) {
+            ImGui::Separator();
+        }
+        if (!ImGui::BeginMenu((std::string(source.icon) + "  " + source.label).c_str())) continue;
+
+        const char* group = nullptr;
+        for (size_t i = 0; i < events.size(); i++) {
+            const ScriptEvent& event = events[i];
+            if (event.source != source.source) continue;
+
+            if (event.group && (!group || std::strcmp(group, event.group) != 0)) {
+                ImGui::SeparatorText(event.group);
+                group = event.group;
+            }
+
+            const bool registered = eventMenuScan.registered[i];
+            const char* name = (lua && event.luaName) ? event.luaName : event.name;
+            if (ImGui::MenuItem(name, ScriptEvents::getParameterNames(event).c_str(), registered)) {
+                pendingEventFile = instance.filepath.string();
+                pendingEvent = i;
+            }
+            ImGui::SetItemTooltip("%s%s", event.description, registered ? "\nAlready added, click to go to its handler" : "");
+        }
+        ImGui::EndMenu();
+    }
+
+    ImGui::EndPopup();
+}
+
+void editor::CodeEditor::addScriptEvent(const std::string& filepath, size_t event) {
+    auto it = editors.find(filepath);
+    if (it == editors.end()) return;
+
+    std::vector<fs::path> paths;
+    std::vector<std::string> texts;
+    getScriptEventFiles(it->second, paths, texts);
+
+    ScriptEventChange change;
+    if (it->second.languageType == SyntaxLanguage::Lua) {
+        change = ScriptEvents::addLua(texts[0], event);
+    } else {
+        change = ScriptEvents::addCpp(texts, it->second.filepath.stem().string(), event);
+    }
+    if (!change.error.empty()) {
+        Out::error("Could not add %s: %s", ScriptEvents::getEvents()[event].name, change.error.c_str());
+        return;
+    }
+
+    // The file getting the caret is opened, other closed files are written directly
+    EditorInstance* target = nullptr;
+    for (size_t i = 0; i < paths.size(); i++) {
+        const std::string key = paths[i].string();
+        const bool isTarget = i == change.cursorDocument;
+        if (isTarget && editors.find(key) == editors.end()) {
+            openFile(key, true);
+        }
+
+        auto open = editors.find(key);
+        if (open != editors.end()) {
+            if (change.texts[i] != texts[i]) {
+                open->second.editor->SetTextUndoable(change.texts[i]);
+                open->second.isModified = true;
+            }
+            if (isTarget) target = &open->second;
+        } else if (change.texts[i] != texts[i]) {
+            std::ofstream file(resolveFilepath(paths[i]), std::ios::trunc);
+            if (!file.is_open()) {
+                Out::error("Could not write file: %s", key.c_str());
+                continue;
+            }
+            file << change.texts[i];
+        }
+    }
+
+    if (target) {
+        int line, col;
+        offsetToLineCol(change.texts[change.cursorDocument], change.cursorOffset, line, col);
+        target->editor->SetCursorPosition(line, col);
+        target->editor->RequestScrollToCursor();
+        target->editor->RequestFocus();
+        target->pendingWindowFocus = true;
+    }
+
+    updateAllProjectSymbols();
+}
+
 void editor::CodeEditor::offsetToLineCol(const std::string& text, size_t offset, int& line, int& col) {
     line = 0;
     col = 0;
@@ -1244,6 +1390,7 @@ void editor::CodeEditor::closeAll() {
     }
     editors.clear();
     changedFilesQueue.clear();
+    pendingEventFile.clear();
     lastFocused = nullptr;
 }
 
@@ -1500,6 +1647,10 @@ void editor::CodeEditor::show() {
         std::string windowTitle = getWindowTitle(instance);
 
         ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+        if (instance.pendingWindowFocus) {
+            ImGui::SetNextWindowFocus();
+            instance.pendingWindowFocus = false;
+        }
         if (ImGui::Begin(windowTitle.c_str(), &instance.isOpen)) {
 
             instance.isModified = instance.editor->GetUndoIndex() != instance.savedUndoIndex;
@@ -1528,11 +1679,23 @@ void editor::CodeEditor::show() {
                 instance.editor->GetLanguageName(),
                 instance.isModified ? "*" : " ");
 
-            // Full-height button vertically centered on the status row, overlapping the
+            // Full-height buttons vertically centered on the status row, overlapping the
             // spacing above and below so the row keeps its text-only height
-            float settingsButtonWidth = ImGui::CalcTextSize(ICON_FA_GEAR).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-            ImGui::SameLine(ImGui::GetContentRegionMax().x - settingsButtonWidth);
-            ImGui::SetCursorPosY(statusRowY - (ImGui::GetFrameHeight() - ImGui::GetTextLineHeight()) * 0.5f);
+            std::string filepath = instance.filepath.string();
+            bool showEvents = Util::isLuaFile(filepath) || Util::isHeaderFile(filepath) || Util::isSourceFile(filepath);
+            float framePadding = ImGui::GetStyle().FramePadding.x * 2.0f;
+            float buttonsWidth = ImGui::CalcTextSize(ICON_FA_GEAR).x + framePadding;
+            if (showEvents) {
+                buttonsWidth += ImGui::CalcTextSize(ICON_FA_BOLT).x + framePadding + ImGui::GetStyle().ItemSpacing.x;
+            }
+            float buttonsY = statusRowY - (ImGui::GetFrameHeight() - ImGui::GetTextLineHeight()) * 0.5f;
+            ImGui::SameLine(ImGui::GetContentRegionMax().x - buttonsWidth);
+            ImGui::SetCursorPosY(buttonsY);
+            if (showEvents) {
+                showEventsButton(instance);
+                ImGui::SameLine();
+                ImGui::SetCursorPosY(buttonsY); // SameLine returns to the text height
+            }
             showSettingsButton();
             ImGui::SetCursorPosY(statusRowY + ImGui::GetTextLineHeightWithSpacing());
 
@@ -1606,6 +1769,11 @@ void editor::CodeEditor::show() {
             [windowId]() { ImGui::SetWindowFocus(windowId.c_str()); }
         );
         ++it;
+    }
+
+    if (!pendingEventFile.empty()) {
+        addScriptEvent(pendingEventFile, pendingEvent);
+        pendingEventFile.clear();
     }
 
     handleFileChangePopup();
