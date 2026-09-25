@@ -1948,9 +1948,13 @@ bool editor::Exporter::copyEngine() {
     if (!copyDir("libs", true)) return false;
     if (!copyDir("platform", true)) return false;
     if (!copyDir("renders", true)) return false;
-    //if (!copyDir("tools")) return false;
     if (!copyDir("workspaces", true)) return false;
     if (config.mode == ExportMode::SourceCode) {
+        fs::copy_file(sdkRoot / "doriax.py", config.targetDir / "doriax.py", fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            setError("Failed to copy doriax.py: " + ec.message());
+            return false;
+        }
         if (!writeAndroidProjectSettings()) return false;
         if (!writeAppleProjectSettings()) return false;
     }

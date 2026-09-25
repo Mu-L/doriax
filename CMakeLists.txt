@@ -345,7 +345,7 @@ add_definitions("-DWITH_MINIAUDIO") # For SoLoud
 set(NFD_PORTAL ON CACHE BOOL "Use xdg-desktop-portal instead of GTK") # For NFD
 set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "Enable parse tools" FORCE) # For yaml-cpp
 
-set(SHADERS_DIR "${CMAKE_SOURCE_DIR}/engine/tools/shaderlib")
+set(SHADERS_DIR "${CMAKE_SOURCE_DIR}/engine/shaderlib")
 set(GENERATED_DIR "${CMAKE_BINARY_DIR}/generated")
 set(SHADERS_HEADER "${GENERATED_DIR}/shaders.h")
 set(GENERATE_SHADERS_SCRIPT "${CMAKE_SOURCE_DIR}/generate_shaders.cmake")
