@@ -237,8 +237,8 @@ Windows release packages use `doriax-editor-cmd.exe` for console automation; the
 These small projects demonstrate real Doriax builds running on the web. Play them, then inspect the source:
 
 - **Character Control** — [Play](https://doriaxengine.github.io/charactercontrol/) · [Source](https://github.com/doriaxengine/charactercontrol)
-- **Simple Physics Control** — [Play](https://doriaxengine.github.io/simplephysicscontrol/) · [Source](https://github.com/doriaxengine/simplephysicscontrol)
 - **Tappy Plane** — [Play](https://doriaxengine.github.io/tappyplane/) · [Source](https://github.com/doriaxengine/tappyplane)
+- **Adventure Horizon** — [Play](https://doriaxengine.github.io/adventurehorizon/) · [Source](https://github.com/doriaxengine/adventurehorizon)
 
 ## Repository layout
 
