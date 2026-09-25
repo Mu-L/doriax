@@ -35,11 +35,19 @@
 #endif
 
 #ifdef HAS_UV_SET1
-    in vec2 v_uv1;
+    #ifdef HAS_TEXTURERECT
+        centroid in vec2 v_uv1;
+    #else
+        in vec2 v_uv1;
+    #endif
 #endif
 
 #ifdef HAS_UV_SET2
-    in vec2 v_uv2;
+    #ifdef HAS_TEXTURERECT
+        centroid in vec2 v_uv2;
+    #else
+        in vec2 v_uv2;
+    #endif
 #endif
 
 #if defined(HAS_VERTEX_COLOR_VEC3) && !defined(HAS_INSTANCING)

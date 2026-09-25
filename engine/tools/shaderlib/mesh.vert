@@ -58,16 +58,26 @@ in vec3 a_position;
 #endif
 #endif
 
+// with MSAA an edge pixel is shaded at its center, which can lie outside a sprite
+// or tile quad; centroid keeps the atlas UV inside the rect
 #ifdef HAS_UV_SET1
     #ifndef HAS_TERRAIN
         in vec2 a_texcoord1;
     #endif
-    out vec2 v_uv1;
+    #ifdef HAS_TEXTURERECT
+        centroid out vec2 v_uv1;
+    #else
+        out vec2 v_uv1;
+    #endif
 #endif
 
 #ifdef HAS_UV_SET2
     in vec2 a_texcoord2;
-    out vec2 v_uv2;
+    #ifdef HAS_TEXTURERECT
+        centroid out vec2 v_uv2;
+    #else
+        out vec2 v_uv2;
+    #endif
 #endif
 
 #ifdef HAS_VERTEX_COLOR_VEC3

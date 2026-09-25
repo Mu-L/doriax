@@ -2702,7 +2702,9 @@ std::filesystem::path editor::App::getUserShaderCacheDir(){
     //      gl_Position is invariant, so a depth prepass matches the color pass; instanced
     //      normals use the cofactor matrix; backfaces flip the shading normal; leaf
     //      transmission adds foliageTransmission to u_fs_pbrParams.
-    return App::getUserCacheBaseDir() / "doriax" / "shaders" / "v28";
+    // v29: sprite and tilemap UVs (HAS_TEXTURERECT) use centroid interpolation, so MSAA
+    //      edge pixels no longer sample outside their atlas rect.
+    return App::getUserCacheBaseDir() / "doriax" / "shaders" / "v29";
 }
 
 void editor::App::pushTabNotificationStyle(){
