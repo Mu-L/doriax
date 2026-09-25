@@ -325,9 +325,6 @@ void LuaBinding::registerMathClasses(lua_State *L){
         .addFunction("fromAxes", 
             luabridge::overload<const Vector3*>(&Quaternion::fromAxes),
             luabridge::overload<const Vector3&, const Vector3&, const Vector3&>(&Quaternion::fromAxes))
-        .addStaticFunction("lookRotation",
-            luabridge::overload<const Vector3&>(&Quaternion::lookRotation),
-            luabridge::overload<const Vector3&, const Vector3&>(&Quaternion::lookRotation))
         .addFunction("fromRotationMatrix", 
             luabridge::overload<const Matrix3&>(&Quaternion::fromRotationMatrix),
             luabridge::overload<const Matrix4&>(&Quaternion::fromRotationMatrix))
@@ -352,6 +349,9 @@ void LuaBinding::registerMathClasses(lua_State *L){
             luabridge::overload<float, const Quaternion&, const Quaternion&>(&Quaternion::nlerp),
             luabridge::overload<float, const Quaternion&, const Quaternion&, bool>(&Quaternion::nlerp))
         .addStaticFunction("squad", &Quaternion::squad)
+        .addStaticFunction("lookRotation",
+            luabridge::overload<const Vector3&>(&Quaternion::lookRotation),
+            luabridge::overload<const Vector3&, const Vector3&>(&Quaternion::lookRotation))
         .addFunction("normalize", &Quaternion::normalize)
         .addFunction("normalized", &Quaternion::normalized)
         .addFunction("normalizeL", &Quaternion::normalizeL)

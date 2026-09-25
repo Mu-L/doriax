@@ -68,8 +68,6 @@ namespace doriax {
         void fromEulerAngles(const float xAngle, const float yAngle, const float zAngle, const RotationOrder& order);
         void fromAxes (const Vector3* akAxis);
         void fromAxes (const Vector3& xaxis, const Vector3& yaxis, const Vector3& zaxis);
-        static Quaternion lookRotation(const Vector3& forward);
-        static Quaternion lookRotation(const Vector3& forward, const Vector3& up);
         Quaternion& fromRotationMatrix (const Matrix3& kRot);
         Quaternion& fromRotationMatrix (const Matrix4& kRot);
         Matrix4 getRotationMatrix() const;
@@ -94,6 +92,9 @@ namespace doriax {
         static Quaternion nlerp(float fT, const Quaternion& rkP, const Quaternion& rkQ);
         static Quaternion nlerp(float fT, const Quaternion& rkP, const Quaternion& rkQ, bool shortestPath);
         static Quaternion squad (float fT, const Quaternion& rkP, const Quaternion& rkA, const Quaternion& rkB, const Quaternion& rkQ);
+        // +Z faces forward (cameras look down -Z)
+        static Quaternion lookRotation(const Vector3& forward);
+        static Quaternion lookRotation(const Vector3& forward, const Vector3& up);
 
         Quaternion& normalize(void);
         Quaternion normalized() const;
