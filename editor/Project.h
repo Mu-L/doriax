@@ -324,6 +324,9 @@ namespace doriax::editor{
         // is about to open, so a non-empty projectPath alone does not imply it.
         bool modelLoaded = false;
 
+        // True when the standalone build sources need an update on the main thread
+        std::atomic<bool> generatedSourcesDirty{false};
+
         std::vector<SceneProject> scenes;
 
         // Scenes project.yaml lists that could not be loaded, the position they held
@@ -452,6 +455,10 @@ namespace doriax::editor{
         bool saveSceneForPlayStartup(SceneProject* sceneProject);
         bool saveLoadedSceneOnStop(SceneProject* loadedSceneProject, SceneProject* editorScene, bool keepModified);
         bool writeSceneToPath(uint32_t sceneId, const std::filesystem::path& path, bool stopTransientPreviews = true);
+        void writeSceneSource(const SceneProject* sceneProject);
+        bool hasMissingSceneSources() const;
+        void writeMissingSceneSources();
+        void configureGenerator();
         void saveModifiedChildScenes(uint32_t sceneId, std::function<void(bool)> callback = nullptr);
         bool hasSceneUnsavedChangesImpl(uint32_t sceneId, std::unordered_set<uint32_t>& visited) const;
         void saveSceneListSequentially(std::vector<uint32_t> sceneIds, std::function<void(bool)> callback);
@@ -644,6 +651,7 @@ namespace doriax::editor{
         bool loadProject(const std::filesystem::path path, bool updateLastOpened = true);
 
         void refreshLinkedMaterials(bool force = false);
+        void updateGeneratedSources();
 
         //=== Linked Material part ===
 

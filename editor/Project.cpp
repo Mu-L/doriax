@@ -3478,6 +3478,9 @@ void editor::Project::removeScene(uint32_t sceneId) {
     if (startSceneId == sceneId) {
         startSceneId = NULL_PROJECT_SCENE;
     }
+
+    // CMakeLists.txt still lists its source
+    generatedSourcesDirty.store(true);
 }
 
 std::vector<std::filesystem::path> editor::Project::findSceneFiles() const {
@@ -3851,6 +3854,7 @@ void editor::Project::resetConfigs() {
     androidProjectSettings = {};
     workspaceMigrationPending = false;
     modelLoaded = false;
+    generatedSourcesDirty.store(false);
     selectedScene = NULL_PROJECT_SCENE;
     selectedSceneForProperties = NULL_PROJECT_SCENE;
     startSceneId = NULL_PROJECT_SCENE;
@@ -4892,12 +4896,64 @@ bool editor::Project::writeSceneToPath(uint32_t sceneId, const std::filesystem::
         addTab(TabType::SCENE, sceneProject->filepath.string());
     }
 
-    std::vector<BundleInstanceInfo> bundleInstances = generator.writeBundleSources(entityBundles, sceneId, getProjectPath(),getProjectInternalPath());
+    writeSceneSource(sceneProject);
+    configureGenerator();
+
+    // Written on the main thread, where closed scenes can be read
+    if (hasMissingSceneSources()) {
+        generatedSourcesDirty.store(true);
+    }
+
+    Out::info("Scene saved to: \"%s\"", fullPath.string().c_str());
+
+    return true;
+}
+
+void editor::Project::writeSceneSource(const SceneProject* sceneProject) {
+    std::vector<BundleInstanceInfo> bundleInstances = generator.writeBundleSources(entityBundles, sceneProject->id, getProjectPath(), getProjectInternalPath());
     generator.writeSceneSource(sceneProject->scene, sceneProject->name, sceneProject->entities, getSceneCamera(sceneProject), getProjectPath(), getProjectInternalPath(), bundleInstances);
+}
+
+bool editor::Project::hasMissingSceneSources() const {
+    return std::any_of(scenes.begin(), scenes.end(), [&](const SceneProject& sceneProject){
+        return !generator.hasSceneSource(sceneProject.name, getProjectInternalPath());
+    });
+}
+
+// Scenes the editor never saved or played, like one created outside it
+void editor::Project::writeMissingSceneSources() {
+    for (const SceneProject& sceneProject : scenes) {
+        if (generator.hasSceneSource(sceneProject.name, getProjectInternalPath())) {
+            continue;
+        }
+
+        if (sceneProject.scene) {
+            writeSceneSource(&sceneProject);
+            continue;
+        }
+
+        std::unique_ptr<SceneProject> probe;
+        try {
+            probe.reset(createRuntimeCloneFromSource(&sceneProject));
+            writeSceneSource(probe.get());
+        } catch (const std::exception& e) {
+            Out::warning("Source of scene '%s' not generated: %s", sceneProject.name.c_str(), e.what());
+        }
+        if (probe) {
+            deleteSceneProject(probe.get());
+        }
+        // forget the bundle instances the probe registered
+        cleanupEntityBundlesForScene(sceneProject.id);
+    }
+}
+
+void editor::Project::configureGenerator() {
+    // the standalone build starts the selected scene
+    const uint32_t startId = getScene(selectedScene) ? selectedScene : startSceneId;
 
     std::vector<editor::SceneBuildInfo> scenesToConfig;
     for (SceneProject& sceneConf : scenes) {
-        bool isMain = (sceneId == sceneConf.id);
+        bool isMain = (startId == sceneConf.id);
         std::vector<uint32_t> involvedSceneIds;
         std::vector<uint32_t> activeSceneIds;
         collectInvolvedScenes(sceneConf.id, involvedSceneIds);
@@ -4909,10 +4965,26 @@ bool editor::Project::writeSceneToPath(uint32_t sceneId, const std::filesystem::
     std::vector<SceneScriptSource> mergedCppScripts = collectAllSceneCppScripts();
     std::vector<BundleSceneInfo> bundleBuildInfos = collectAllBundles();
     generator.configure(scenesToConfig, libName, mergedCppScripts, bundleBuildInfos, getProjectPath(), getProjectInternalPath(), getAssetsPath(), getLuaPath(), getScriptDirs(), getCxxStandard(), scalingMode, textureStrategy, canvasWidth, canvasHeight, vsyncEnabled, getWindowSettings());
+}
 
-    Out::info("Scene saved to: \"%s\"", fullPath.string().c_str());
+void editor::Project::updateGeneratedSources() {
+    if (!generatedSourcesDirty.load() || isAnyScenePlaying()) {
+        return;
+    }
+    generatedSourcesDirty.store(false);
 
-    return true;
+    // nothing to update until a save or play creates the build
+    std::error_code ec;
+    if (!fs::exists(getProjectPath() / "CMakeLists.txt", ec)) {
+        return;
+    }
+
+    try {
+        writeMissingSceneSources();
+        configureGenerator();
+    } catch (const std::exception& e) {
+        Out::error("Failed to update generated sources: %s", e.what());
+    }
 }
 
 void editor::Project::saveSceneToPathAsync(uint32_t sceneId, const std::filesystem::path& path, std::function<void(bool)> callback) {
@@ -5432,6 +5504,11 @@ void editor::Project::setSelectedSceneId(uint32_t selectedScene){
 
         this->selectedScene = selectedScene;
         this->selectedSceneForProperties = selectedScene;
+
+        // The standalone build starts the selected scene, but opening a project writes nothing.
+        if (modelLoaded){
+            generatedSourcesDirty.store(true);
+        }
 
         // A newly selected scene must draw at least once.
         if (SceneProject* sceneProject = getScene(selectedScene)){
@@ -8150,6 +8227,10 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
                         failPlayStartup(session, sceneId, "Failed to save modified scene before play startup");
                         return;
                     }
+                    // involved scenes are written below
+                    if (!isInvolvedScene) {
+                        writeSceneSource(&currentSceneProject);
+                    }
                 } else {
                     updateSceneCppScripts(&currentSceneProject);
                     updateSceneBundles(&currentSceneProject);
@@ -8236,6 +8317,9 @@ void editor::Project::runPlayStartup(const std::shared_ptr<PlaySession>& session
         std::vector<SceneScriptSource> mergedCppScripts = collectAllSceneCppScripts();
         std::vector<BundleSceneInfo> bundleBuildInfos = collectAllBundles();
         generator.configure(scenesToGenerate, libName, mergedCppScripts, bundleBuildInfos, getProjectPath(), getProjectInternalPath(), getAssetsPath(), getLuaPath(), getScriptDirs(), getCxxStandard(), scalingMode, textureStrategy, canvasWidth, canvasHeight, vsyncEnabled, getWindowSettings());
+        if (hasMissingSceneSources()) {
+            generatedSourcesDirty.store(true);
+        }
 
         // play regenerates the standalone project, so its shaders are ensured here too
         buildStandaloneShaderCache();

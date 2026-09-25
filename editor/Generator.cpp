@@ -1396,6 +1396,11 @@ void editor::Generator::clearSceneSource(const std::string& sceneName, const fs:
     }
 }
 
+bool editor::Generator::hasSceneSource(const std::string& sceneName, const fs::path& projectInternalPath) const {
+    std::error_code ec;
+    return fs::exists(getGeneratedPath(projectInternalPath) / (Factory::toIdentifier(sceneName) + ".cpp"), ec);
+}
+
 void editor::Generator::configure(const std::vector<editor::SceneBuildInfo>& scenes, std::string libName, const std::vector<SceneScriptSource>& scriptFiles, const std::vector<editor::BundleSceneInfo>& bundles, const fs::path& projectPath, const fs::path& projectInternalPath, const fs::path& assetsPath, const fs::path& luaPath, const std::vector<fs::path>& scriptDirs, int cxxStandard, Scaling scalingMode, TextureStrategy textureStrategy, unsigned int canvasWidth, unsigned int canvasHeight, bool vsyncEnabled, const WindowSettings& windowSettings){
     const fs::path generatedPath = getGeneratedPath(projectInternalPath);
 
