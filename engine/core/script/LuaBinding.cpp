@@ -260,7 +260,7 @@ int LuaBinding::luaRegisterEventImpl(lua_State* L, int eventIndex, int selfIndex
     }
     int tagIndex = lua_gettop(L);
 
-    // Build closure: function(...) method(self, ...) end
+    // Build closure: function(...) return method(self, ...) end
     lua_pushvalue(L, methodFuncIndex); // method
     lua_pushvalue(L, selfIndex);       // self
     lua_pushcclosure(L,
@@ -275,10 +275,11 @@ int LuaBinding::luaRegisterEventImpl(lua_State* L, int eventIndex, int selfIndex
             }
 
             // lua_error below unwinds the script frames, get the traceback here
-            if (pcallWithTraceback(Linner, 1 + nargs, 0) != LUA_OK) {
+            if (pcallWithTraceback(Linner, 1 + nargs, LUA_MULTRET) != LUA_OK) {
                 return lua_error(Linner);
             }
-            return 0;
+            // Filters like preSolve2D read what the method returns
+            return lua_gettop(Linner) - nargs;
         },
         2);
     int closureIndex = lua_gettop(L);

@@ -442,6 +442,26 @@ void PhysicsSystem::setGravity(float x, float y, float z){
     setGravity(Vector3(x, y, z));
 }
 
+void PhysicsSystem::removeSubscriptionsByTag(const std::string& substring){
+#ifdef DORIAX_PHYSICS_2D
+    beginContact2D.removeByTagSubstring(substring);
+    endContact2D.removeByTagSubstring(substring);
+    beginSensorContact2D.removeByTagSubstring(substring);
+    endSensorContact2D.removeByTagSubstring(substring);
+    hitContact2D.removeByTagSubstring(substring);
+    preSolve2D.removeByTagSubstring(substring);
+    shouldCollide2D.removeByTagSubstring(substring);
+#endif
+#ifdef DORIAX_PHYSICS_3D
+    onBodyActivated3D.removeByTagSubstring(substring);
+    onBodyDeactivated3D.removeByTagSubstring(substring);
+    onContactAdded3D.removeByTagSubstring(substring);
+    onContactPersisted3D.removeByTagSubstring(substring);
+    onContactRemoved3D.removeByTagSubstring(substring);
+    shouldCollide3D.removeByTagSubstring(substring);
+#endif
+}
+
 #ifdef DORIAX_PHYSICS_2D
 float PhysicsSystem::getPointsToMeterScale2D() const{
     return pointsToMeterScale2D;

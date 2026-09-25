@@ -99,6 +99,13 @@ void Scene::removeSubscriptionsByTag(const std::string& substring) {
     removeComponentSubscriptionsByTag<ScrollbarComponent>(this, substring, [](ScrollbarComponent& scrollbar, const std::string& tag) {
         scrollbar.onChange.removeByTagSubstring(tag);
     });
+
+    removeComponentSubscriptionsByTag<TextEditComponent>(this, substring, [](TextEditComponent& textEdit, const std::string& tag) {
+        textEdit.onChange.removeByTagSubstring(tag);
+        textEdit.onSubmit.removeByTagSubstring(tag);
+    });
+
+    getSystem<PhysicsSystem>()->removeSubscriptionsByTag(substring);
 }
 
 void Scene::setCamera(Camera* camera){

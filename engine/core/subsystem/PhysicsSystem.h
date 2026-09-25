@@ -29,6 +29,7 @@
 #include "Jolt/Physics/Collision/ObjectLayerPairFilterMask.h"
 #endif
 
+#include <string>
 #include <unordered_set>
 
 namespace doriax{
@@ -115,6 +116,9 @@ namespace doriax{
 		void setGravity(Vector3 gravity);
 		void setGravity(float x, float y);
 		void setGravity(float x, float y, float z);
+
+		// Removes the event callbacks with the substring in their tag
+		void removeSubscriptionsByTag(const std::string& substring);
 
 #ifdef DORIAX_PHYSICS_2D
 		float getPointsToMeterScale2D() const;
