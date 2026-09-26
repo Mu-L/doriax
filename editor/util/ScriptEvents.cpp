@@ -73,7 +73,7 @@ const std::vector<ScriptEvent>& eventList() {
         {S::Input, "onTouchStart", "Touch", "A touch begins", touch},
         {S::Input, "onTouchMove", "Touch", "A touch moves", touch},
         {S::Input, "onTouchEnd", "Touch", "A touch ends", touch},
-        {S::Input, "onTouchCancel", "Touch", "The touches are cancelled", {}},
+        {S::Input, "onTouchCancel", "Touch", "A touch is cancelled without a release or click; uses its last recorded canvas position", touch},
         {S::Input, "onGamepadConnect", "Gamepad", "A gamepad is connected", {{"int", "gamepad"}}},
         {S::Input, "onGamepadDisconnect", "Gamepad", "A gamepad is disconnected", {{"int", "gamepad"}}},
         {S::Input, "onGamepadButtonDown", "Gamepad", "A gamepad button is pressed", gamepadButton},

@@ -92,12 +92,6 @@ static UITouch* touches[MAX_TOUCHES];
     return -1;
 }
 
--(void)clearTouches{
-    for (int i = 0; i < MAX_TOUCHES; i++) {
-        touches[i] = NULL;
-    }
-}
-
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent*)event{
     [super touchesBegan:touches withEvent:event];
     for (UITouch *touch in touches) {
@@ -125,10 +119,29 @@ static UITouch* touches[MAX_TOUCHES];
     }
 }
 
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent*)event{
-    [super touchesCancelled:touches withEvent:event];
-    [self clearTouches];
-    doriax::Engine::systemTouchCancel();
+- (void)touchesCancelled:(NSSet<UITouch *> *)cancelledTouches withEvent:(UIEvent*)event{
+    [super touchesCancelled:cancelledTouches withEvent:event];
+    int cancelledIds[MAX_TOUCHES];
+    int cancelledCount = 0;
+    bool anyHeld = false;
+    for (int i = 0; i < MAX_TOUCHES; i++) {
+        if (!touches[i])
+            continue;
+        if ([cancelledTouches containsObject:touches[i]]) {
+            cancelledIds[cancelledCount++] = i + 1;
+            touches[i] = NULL;
+        } else {
+            anyHeld = true;
+        }
+    }
+
+    // Release native IDs before callbacks, preserving IDs for fingers still held.
+    if (!anyHeld) {
+        doriax::Engine::systemTouchCancel();
+    } else {
+        for (int i = 0; i < cancelledCount; i++)
+            doriax::Engine::systemTouchCancel(cancelledIds[i]);
+    }
 }
 
 @end

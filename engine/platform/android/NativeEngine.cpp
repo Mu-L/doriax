@@ -941,22 +941,30 @@ void NativeEngine::handleGameActivityInput(){
             if (motionEvent->pointerCount > 0) {
                 int action = motionEvent->action;
                 int actionMasked = action & AMOTION_EVENT_ACTION_MASK;
-                int ptrIndex = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>  AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
 
-                if (ptrIndex < motionEvent->pointerCount) {
-                    int motionPointerId = motionEvent->pointers[ptrIndex].id;
-                    bool motionIsOnScreen = motionEvent->source == AINPUT_SOURCE_TOUCHSCREEN;
-                    float motionX = GameActivityPointerAxes_getX(&motionEvent->pointers[ptrIndex]);
-                    float motionY = GameActivityPointerAxes_getY(&motionEvent->pointers[ptrIndex]);
-
-                    if (actionMasked == AMOTION_EVENT_ACTION_DOWN || actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
-                        doriax::Engine::systemTouchStart(motionPointerId, motionX, motionY);
-                    } else if (actionMasked == AMOTION_EVENT_ACTION_UP || actionMasked == AMOTION_EVENT_ACTION_POINTER_UP) {
-                        doriax::Engine::systemTouchEnd(motionPointerId, motionX, motionY);
-                    } else if (actionMasked == AMOTION_EVENT_ACTION_MOVE) {
+                // MOVE has no pointer index. Every finger's position is in the array;
+                // updating only index 0 freezes the other finger on its button.
+                if (actionMasked == AMOTION_EVENT_ACTION_MOVE) {
+                    for (int p = 0; p < (int)motionEvent->pointerCount; ++p) {
+                        int motionPointerId = motionEvent->pointers[p].id;
+                        float motionX = GameActivityPointerAxes_getX(&motionEvent->pointers[p]);
+                        float motionY = GameActivityPointerAxes_getY(&motionEvent->pointers[p]);
                         doriax::Engine::systemTouchMove(motionPointerId, motionX, motionY);
-                    } else if (actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
-                        doriax::Engine::systemTouchCancel();
+                    }
+                } else if (actionMasked == AMOTION_EVENT_ACTION_CANCEL) {
+                    doriax::Engine::systemTouchCancel();
+                } else {
+                    int ptrIndex = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
+                    if (ptrIndex >= 0 && ptrIndex < (int)motionEvent->pointerCount) {
+                        int motionPointerId = motionEvent->pointers[ptrIndex].id;
+                        float motionX = GameActivityPointerAxes_getX(&motionEvent->pointers[ptrIndex]);
+                        float motionY = GameActivityPointerAxes_getY(&motionEvent->pointers[ptrIndex]);
+
+                        if (actionMasked == AMOTION_EVENT_ACTION_DOWN || actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
+                            doriax::Engine::systemTouchStart(motionPointerId, motionX, motionY);
+                        } else if (actionMasked == AMOTION_EVENT_ACTION_UP || actionMasked == AMOTION_EVENT_ACTION_POINTER_UP) {
+                            doriax::Engine::systemTouchEnd(motionPointerId, motionX, motionY);
+                        }
                     }
                 }
             }

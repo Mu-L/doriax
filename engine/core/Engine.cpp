@@ -111,7 +111,7 @@ FunctionSubscribe<void()> Engine::onShutdown;
 FunctionSubscribe<void(int,float,float)> Engine::onTouchStart;
 FunctionSubscribe<void(int,float,float)> Engine::onTouchEnd;
 FunctionSubscribe<void(int,float,float)> Engine::onTouchMove;
-FunctionSubscribe<void()> Engine::onTouchCancel;
+FunctionSubscribe<void(int,float,float)> Engine::onTouchCancel;
 FunctionSubscribe<void(int,float,float,int)> Engine::onMouseDown;
 FunctionSubscribe<void(int,float,float,int)> Engine::onMouseUp;
 FunctionSubscribe<void(float,float,int)> Engine::onMouseScroll;
@@ -1330,9 +1330,21 @@ void Engine::systemTouchMove(int pointer, float x, float y){
 
 void Engine::systemTouchCancel(){
     //-----------------
+    std::vector<Touch> cancelled = Input::getTouches();
     Input::clearTouches();
-    Engine::onTouchCancel.call();
+    for (const Touch& touch : cancelled)
+        Engine::onTouchCancel.call(touch.pointer, touch.position.x, touch.position.y);
     //-----------------
+}
+
+void Engine::systemTouchCancel(int pointer){
+    // Drop this finger only. Pointer-up would release the control and can click it.
+    size_t index = Input::findTouchIndex(pointer);
+    if (index == -1)
+        return;
+    Vector2 pos = Input::getTouchPosition(pointer);
+    Input::removeTouch(pointer);
+    Engine::onTouchCancel.call(pointer, pos.x, pos.y);
 }
 
 void Engine::systemMouseDown(int button, float x, float y, int mods){

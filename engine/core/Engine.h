@@ -415,6 +415,8 @@ namespace doriax {
         static void systemTouchEnd(int pointer, float x, float y);
         static void systemTouchMove(int pointer, float x, float y);
         static void systemTouchCancel();
+        // One interrupted finger. Not a release: no pointer-up and no click.
+        static void systemTouchCancel(int pointer);
 
         static void systemMouseDown(int button, float x, float y, int mods);
         static void systemMouseUp(int button, float x, float y, int mods);
@@ -452,7 +454,8 @@ namespace doriax {
         static FunctionSubscribe<void(int,float,float)> onTouchStart;
         static FunctionSubscribe<void(int,float,float)> onTouchEnd;
         static FunctionSubscribe<void(int,float,float)> onTouchMove;
-        static FunctionSubscribe<void()> onTouchCancel;
+        // One finger was interrupted. Not a pointer-up, so it does not click.
+        static FunctionSubscribe<void(int,float,float)> onTouchCancel;
         static FunctionSubscribe<void(int,float,float,int)> onMouseDown;
         static FunctionSubscribe<void(int,float,float,int)> onMouseUp;
         static FunctionSubscribe<void(float,float,int)> onMouseScroll;

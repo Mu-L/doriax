@@ -611,28 +611,51 @@ EM_BOOL DoriaxWeb::wheel_callback(int eventType, const EmscriptenWheelEvent *e, 
 EM_BOOL DoriaxWeb::touch_callback(int emsc_type, const EmscriptenTouchEvent* emsc_event, void* user_data) {
     bool retval = true;
 
+    // Emscripten lists every finger. isChanged is the one this event is about.
+    // Ending a finger that is still held releases its button, so a jump tap stops a run.
+    // Cancel is not a release: pointer-up can click the control under the finger.
     switch (emsc_type) {
         case EMSCRIPTEN_EVENT_TOUCHSTART:
             for (int i = 0; i < emsc_event->numTouches; i++) {
                 const EmscriptenTouchPoint* src = &emsc_event->touches[i];
+                if (!src->isChanged) continue;
                 doriax::Engine::systemTouchStart((int)src->identifier, src->targetX, src->targetY);
             }
             break;
         case EMSCRIPTEN_EVENT_TOUCHMOVE:
             for (int i = 0; i < emsc_event->numTouches; i++) {
                 const EmscriptenTouchPoint* src = &emsc_event->touches[i];
+                if (!src->isChanged) continue;
                 doriax::Engine::systemTouchMove((int)src->identifier, src->targetX, src->targetY);
             }
             break;
         case EMSCRIPTEN_EVENT_TOUCHEND:
             for (int i = 0; i < emsc_event->numTouches; i++) {
                 const EmscriptenTouchPoint* src = &emsc_event->touches[i];
+                if (!src->isChanged) continue;
                 doriax::Engine::systemTouchEnd((int)src->identifier, src->targetX, src->targetY);
             }
             break;
-        case EMSCRIPTEN_EVENT_TOUCHCANCEL:
-            doriax::Engine::systemTouchCancel();
+        case EMSCRIPTEN_EVENT_TOUCHCANCEL: {
+            bool anyHeld = false;
+            for (int i = 0; i < emsc_event->numTouches; i++) {
+                if (!emsc_event->touches[i].isChanged) {
+                    anyHeld = true;
+                    break;
+                }
+            }
+            if (!anyHeld) {
+                // Clear all touches before notifying listeners of each cancellation.
+                doriax::Engine::systemTouchCancel();
+            } else {
+                for (int i = 0; i < emsc_event->numTouches; i++) {
+                    const EmscriptenTouchPoint* src = &emsc_event->touches[i];
+                    if (src->isChanged)
+                        doriax::Engine::systemTouchCancel((int)src->identifier);
+                }
+            }
             break;
+        }
         default:
             retval = false;
             break;
