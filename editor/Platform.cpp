@@ -67,6 +67,10 @@ sg_swapchain editor::Platform::getSokolSwapchain(){
     #endif
 }
 
+bool editor::Platform::isTouchDevice(){
+    return project->isSimulateTouch();
+}
+
 void editor::Platform::setMouseMode(MouseMode mode){
     Backend::setMouseMode(mode);
 }

@@ -321,6 +321,7 @@ namespace doriax::editor{
         uint32_t startSceneId;
         LoadingSettings loadingSettings;
         TerrainEditorSettings terrainEditorSettings;
+        bool simulateTouch;
 
         // True while project.yaml holds the only copy of this user's editor state
         bool workspaceMigrationPending = false;
@@ -643,6 +644,10 @@ namespace doriax::editor{
 
         TerrainEditorSettings& getTerrainEditorSettings();
         const TerrainEditorSettings& getTerrainEditorSettings() const;
+
+        // Play acts as a touch device: the mouse is one finger and isTouchDevice() is true
+        bool isSimulateTouch() const;
+        void setSimulateTouch(bool simulateTouch);
 
         CommandHistory* getProjectCommandHistory();
 

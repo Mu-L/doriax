@@ -2349,6 +2349,8 @@ void editor::Stream::decodeProject(Project* project, const YAML::Node& node, con
         project->getTerrainEditorSettings() = workspace.getTerrainEditorSettings();
     }
 
+    project->setSimulateTouch(workspace.isSimulateTouch());
+
     // Which scenes are open is a per-user choice, so the tab list decides it. With no
     // workspace yet, the first scene opens, as it does for a fresh clone.
     std::set<std::string> openedScenePaths;

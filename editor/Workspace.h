@@ -56,6 +56,8 @@ public:
     bool hasTerrainEditorSettings() const { return terrainDefined; }
     const TerrainEditorSettings& getTerrainEditorSettings() const { return terrainEditorSettings; }
 
+    bool isSimulateTouch() const { return simulateTouch; }
+
     // Keyed by project-relative path, so reordering scenes never rewrites this file
     const SceneState* getSceneState(const std::filesystem::path& sceneFilepath) const;
 
@@ -73,6 +75,8 @@ private:
 
     TerrainEditorSettings terrainEditorSettings;
     bool terrainDefined = false;
+
+    bool simulateTouch = false;
 
     std::map<std::string, SceneState> sceneStates;
     bool adoptedLegacy = false;

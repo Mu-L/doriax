@@ -2721,6 +2721,14 @@ const editor::TerrainEditorSettings& editor::Project::getTerrainEditorSettings()
     return terrainEditorSettings;
 }
 
+bool editor::Project::isSimulateTouch() const{
+    return simulateTouch;
+}
+
+void editor::Project::setSimulateTouch(bool simulateTouch){
+    this->simulateTouch = simulateTouch;
+}
+
 editor::CommandHistory* editor::Project::getProjectCommandHistory(){
     return &projectHistory;
 }
@@ -4019,6 +4027,7 @@ void editor::Project::resetConfigs() {
     startSceneId = NULL_PROJECT_SCENE;
     loadingSettings = {};
     terrainEditorSettings = {};
+    simulateTouch = false;
     projectPath.clear();
     materialFileLinks.clear();
     tabs.clear();

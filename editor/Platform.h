@@ -32,6 +32,8 @@ namespace doriax::editor{
         sg_environment getSokolEnvironment() override;
         sg_swapchain getSokolSwapchain() override;
 
+        bool isTouchDevice() override;
+
         void setMouseMode(MouseMode mode) override;
 
         void quit() override;

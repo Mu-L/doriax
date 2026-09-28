@@ -933,7 +933,11 @@ void editor::SceneWindow::releasePlayMouseButtons(int mods){
     const float x = std::clamp(playMousePos.x, view.getX(), view.getX() + std::max(0.0f, view.getWidth()));
     const float y = std::clamp(playMousePos.y, view.getY(), view.getY() + std::max(0.0f, view.getHeight()));
     for (int button : playPressedMouseButtons){
-        Engine::systemMouseUp(button, x, y, mods);
+        if (project->isSimulateTouch()) {
+            Engine::systemTouchEnd(0, x, y);
+        } else {
+            Engine::systemMouseUp(button, x, y, mods);
+        }
     }
     playPressedMouseButtons.clear();
 }
@@ -1006,24 +1010,39 @@ void editor::SceneWindow::sceneEventHandler(SceneProject* sceneProject) {
                 (x >= view.getX() && x <= view.getX() + view.getWidth() &&
                  y >= view.getY() && y <= view.getY() + view.getHeight());
 
-            Engine::systemMouseMove(x, y, mods);
             if (accepted) {
                 playMouseSceneId = sceneProject->id;
                 playMousePos = ImVec2(x, y);
             }
 
-            if (mouseWheel != 0) {
-                Engine::systemMouseScroll(0, mouseWheel, mods);
-            }
-
-            for (int i = 0; i < 5; i++) {
-                if (ImGui::IsMouseClicked(i)) {
-                    Engine::systemMouseDown(i, x, y, mods);
-                    if (accepted) playPressedMouseButtons.insert(i);
+            if (project->isSimulateTouch()) {
+                // the left button is one finger, which never hovers
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    Engine::systemTouchStart(0, x, y);
+                    if (accepted) playPressedMouseButtons.insert(ImGuiMouseButton_Left);
+                } else if (playPressedMouseButtons.count(ImGuiMouseButton_Left) && (mouseDelta.x != 0 || mouseDelta.y != 0)) {
+                    Engine::systemTouchMove(0, x, y);
                 }
-                if (ImGui::IsMouseReleased(i)) {
-                    Engine::systemMouseUp(i, x, y, mods);
-                    if (accepted) playPressedMouseButtons.erase(i);
+                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && playPressedMouseButtons.count(ImGuiMouseButton_Left)) {
+                    Engine::systemTouchEnd(0, x, y);
+                    if (accepted) playPressedMouseButtons.erase(ImGuiMouseButton_Left);
+                }
+            } else {
+                Engine::systemMouseMove(x, y, mods);
+
+                if (mouseWheel != 0) {
+                    Engine::systemMouseScroll(0, mouseWheel, mods);
+                }
+
+                for (int i = 0; i < 5; i++) {
+                    if (ImGui::IsMouseClicked(i)) {
+                        Engine::systemMouseDown(i, x, y, mods);
+                        if (accepted) playPressedMouseButtons.insert(i);
+                    }
+                    if (ImGui::IsMouseReleased(i)) {
+                        Engine::systemMouseUp(i, x, y, mods);
+                        if (accepted) playPressedMouseButtons.erase(i);
+                    }
                 }
             }
         } else if (playMouseSceneId == sceneProject->id) {
@@ -1961,6 +1980,19 @@ void editor::SceneWindow::show() {
             if (ImGui::Button(ICON_FA_STOP " Stop")) {
                 project->stop(sceneProject.id);
             }
+            ImGui::EndDisabled();
+
+            // Touch simulation toggle - disabled while any scene plays
+            bool simulateTouch = project->isSimulateTouch();
+            ImGui::BeginDisabled(project->isAnyScenePlaying());
+            ImGui::SameLine();
+            if (simulateTouch) ImGui::PushStyleColor(ImGuiCol_Button, Theme::Colors::ButtonActivated);
+            if (ImGui::Button(ICON_FA_MOBILE_SCREEN)) {
+                project->setSimulateTouch(!simulateTouch);
+                project->saveWorkspaceFile();
+            }
+            if (simulateTouch) ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("Play as a touch device (the mouse acts as one finger)");
             ImGui::EndDisabled();
 
             ImGui::SameLine(0, Theme::dpi(10.0f));
