@@ -385,6 +385,11 @@ void McpServer::handlePost(const httplib::Request& req, httplib::Response& res) 
         Json result = dispatch(method, id, params, modern, req);
         if (modern) {
             result["resultType"] = "complete";
+            if (method == "server/discover" || method == "tools/list") {
+                // Always stale, since turning changes on or off alters the tool list
+                result["ttlMs"] = 0;
+                result["cacheScope"] = "private";
+            }
         }
         reply(res, 200, {{"jsonrpc", "2.0"}, {"id", id}, {"result", result}});
     } catch (const RpcError& e) {
