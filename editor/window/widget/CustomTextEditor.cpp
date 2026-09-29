@@ -67,6 +67,18 @@ std::string baseClassFromDetail(const std::string& detail) {
     return base;
 }
 
+// Member details start with "Parent.name", which the label already shows
+std::string detailAfterName(const std::string& detail, const std::string& parent, const std::string& name) {
+    for (const char* sep : {"::", ":", "."}) {
+        std::string prefix = parent + sep + name;
+        if (detail.rfind(prefix, 0) == 0) {
+            size_t start = detail.find_first_not_of(' ', prefix.size());
+            return start == std::string::npos ? "" : detail.substr(start);
+        }
+    }
+    return "";
+}
+
 bool isUtf8Continuation(unsigned char c) {
     return (c & 0xC0) == 0x80;
 }
@@ -3700,17 +3712,23 @@ void CustomTextEditor::renderSuggestions(const ImVec2& origin) {
 
             ImGui::TextUnformatted(item.label.c_str());
 
-            // Detail (right-aligned, dimmed)
+            // Detail (right-aligned, dimmed), without its "Parent.name" start when too long
             if (!item.detail.empty()) {
                 float labelWidth = ImGui::CalcTextSize(item.label.c_str()).x;
                 float iconWidth = ImGui::CalcTextSize(icon).x + ImGui::GetStyle().ItemSpacing.x;
-                float detailWidth = ImGui::CalcTextSize(item.detail.c_str()).x;
+                std::string detail = item.detail;
+                float detailWidth = ImGui::CalcTextSize(detail.c_str()).x;
                 float spacing = availWidth - labelWidth - iconWidth - detailWidth - 20;
 
-                if (spacing > 20) {
+                if (spacing <= 20) {
+                    detail = detailAfterName(detail, item.parentType, item.label);
+                    spacing += detailWidth - ImGui::CalcTextSize(detail.c_str()).x;
+                }
+
+                if (!detail.empty() && spacing > 20) {
                     ImGui::SameLine(0, spacing);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-                    ImGui::TextUnformatted(item.detail.c_str());
+                    ImGui::TextUnformatted(detail.c_str());
                     ImGui::PopStyleColor();
                 }
             }

@@ -38,6 +38,12 @@ RE_ADD_STATIC_FUNCTION = re.compile(r'\.addStaticFunction\(\s*"([^"]+)"')
 RE_ADD_PROPERTY = re.compile(r'\.addProperty\(\s*"([^"]+)"')
 RE_ADD_STATIC_PROPERTY = re.compile(r'\.addStaticProperty\(\s*"([^"]+)"')
 
+# Property getters: a cast naming the return type, or a plain member pointer
+RE_GETTER_CAST = re.compile(r'\((.+?)\([A-Za-z0-9_]+::\*\)')
+RE_GETTER_MEMBER = re.compile(r'&([A-Za-z0-9_]+)::([A-Za-z0-9_]+)$')
+# Containers LuaBridge pushes as a new table
+RE_TABLE_CONTAINER = re.compile(r'(?:vector|array|list|map|unordered_map|set|pair|tuple)\s*<')
+
 EXCLUDED_HEADER_METHODS = {
     ('EntityHandle', 'addComponent'),
     ('EntityHandle', 'removeComponent'),
@@ -55,13 +61,14 @@ EXCLUDED_HEADER_METHODS = {
 
 class APISymbol:
     """Represents one symbol in the engine API."""
-    __slots__ = ('name', 'kind', 'detail', 'parent')
+    __slots__ = ('name', 'kind', 'detail', 'parent', 'getter')
 
-    def __init__(self, name, kind, detail='', parent=''):
+    def __init__(self, name, kind, detail='', parent='', getter=''):
         self.name = name
         self.kind = kind
         self.detail = detail
         self.parent = parent
+        self.getter = getter  # getter of a writable property
 
     def __repr__(self):
         return f'APISymbol({self.name!r}, {self.kind!r})'
@@ -215,9 +222,11 @@ def parse_binding_file(filepath):
         if m:
             pname = m.group(1)
             if not pname.startswith('__'):
+                args = _call_arguments(stripped[m.start():])
                 symbols.append(APISymbol(
                     pname, 'Property',
-                    f'{current_lua_name}.{pname}', current_lua_name
+                    f'{current_lua_name}.{pname}', current_lua_name,
+                    getter=args[1] if len(args) > 2 else ''
                 ))
             continue
 
@@ -335,6 +344,28 @@ _RETURN_TYPE_REJECT = {
 }
 
 
+def _getter_return_type(getter, cpp_methods):
+    """C++ return type of a property getter, or '' when unknown."""
+    m = RE_GETTER_CAST.match(getter)
+    if m:
+        return m.group(1)
+    m = RE_GETTER_MEMBER.match(getter)
+    if not m:
+        return ''
+    # Data members are not in cpp_methods: Lua gets a reference to them
+    overloads = cpp_methods.get(m.group(1), {}).get(m.group(2), [])
+    return next((ret for params, ret in overloads if not params), '')
+
+
+def _copied_type(ret, class_names):
+    """Type Lua gets as a copy from a getter returning ret, or ''."""
+    t = _simplify_return_type(ret)
+    # Containers always become a new table, bound classes only when returned by value
+    if RE_TABLE_CONTAINER.match(t) or (t in class_names and not re.search(r'[&*]', ret)):
+        return t
+    return ''
+
+
 def _simplify_params(params_str):
     """Simplify a full parameter list string."""
     if not params_str.strip() or params_str.strip() == 'void':
@@ -369,6 +400,30 @@ def _parse_constructor_details(text, class_name):
             details.append(detail)
 
     return details or [f'{class_name}()']
+
+
+def _call_arguments(text):
+    """Top-level arguments of the first call in text."""
+    args = []
+    arg = ''
+    depth = 0
+    for c in text:
+        if c in '([{':
+            depth += 1
+            if depth == 1:
+                continue
+        elif c in ')]}':
+            depth -= 1
+            if depth == 0:
+                break
+        elif c == ',' and depth == 1:
+            args.append(arg.strip())
+            arg = ''
+            continue
+        if depth:
+            arg += c
+    args.append(arg.strip())
+    return args
 
 
 def parse_cpp_headers(base_dir):
@@ -423,10 +478,9 @@ def parse_cpp_headers(base_dir):
                     if (class_name, method_name) in EXCLUDED_HEADER_METHODS:
                         continue
                     params = _simplify_params(params_raw)
-                    returns = _simplify_return_type(ret_type)
                     if method_name not in class_methods[class_name]:
                         class_methods[class_name][method_name] = []
-                    class_methods[class_name][method_name].append((params, returns))
+                    class_methods[class_name][method_name].append((params, ret_type))
 
     return class_methods
 
@@ -569,8 +623,9 @@ def main():
 
     def _format_detail(parent, name, sep, overload):
         """Build a 'Parent<sep>name(params) -> Return' detail from a (params, return) pair."""
-        params, returns = overload
+        params, ret_type = overload
         detail = f'{parent}{sep}{name}({params})'
+        returns = _simplify_return_type(ret_type)
         if returns:
             detail += f' -> {returns}'
         return detail
@@ -591,9 +646,17 @@ def main():
                 sep = '.' if s.kind == 'StaticMethod' else ':'
                 s.detail = _format_detail(s.parent, s.name, sep, sig)
 
+    lua_classes = {s.name for s in all_symbols if s.kind == 'Class'}
+
+    # Tag properties whose getter gives Lua a copy (obj.position.y = 1 changes nothing)
+    for s in all_symbols:
+        if s.kind == 'Property' and s.getter:
+            copied = _copied_type(_getter_return_type(s.getter, cpp_methods), lua_classes)
+            if copied:
+                s.detail += f' -> {copied} (copy)'
+
     # C++ methods a bound class does NOT expose to Lua: 'CppMethod' + Class::method,
     # so nothing offers them as Lua calls that would resolve to nil.
-    lua_classes = {s.name for s in all_symbols if s.kind == 'Class'}
     lua_bound_methods = {
         (s.name, s.parent) for s in all_symbols
         if s.kind in ('Method', 'StaticMethod')
