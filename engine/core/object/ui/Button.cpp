@@ -87,7 +87,7 @@ Vector4 Button::getLabelColor() const{
     ButtonComponent& btcomp = getComponent<ButtonComponent>();
     UIComponent& uilabel = scene->getComponent<UIComponent>(btcomp.label);
 
-    return uilabel.color;
+    return Color::linearTosRGB(uilabel.color);
 }
 
 void Button::setLabelFont(const std::string& font){

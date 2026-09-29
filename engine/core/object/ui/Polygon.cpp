@@ -102,7 +102,7 @@ void Polygon::setAlpha(const float alpha){
 Vector4 Polygon::getColor() const{
     UIComponent& ui = getComponent<UIComponent>();
 
-    return ui.color;
+    return Color::linearTosRGB(ui.color);
 }
 
 float Polygon::getAlpha() const{

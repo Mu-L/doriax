@@ -72,7 +72,7 @@ void Light::setColor(const float r, const float g, const float b){
 Vector3 Light::getColor() const{
     LightComponent& lightcomp = getComponent<LightComponent>();
 
-    return lightcomp.color;
+    return Color::linearTosRGB(lightcomp.color);
 }
 
 void Light::setRange(float range){

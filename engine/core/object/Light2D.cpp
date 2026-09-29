@@ -31,7 +31,7 @@ void Light2D::setColor(const float r, const float g, const float b){
 Vector3 Light2D::getColor() const{
     Light2DComponent& lightcomp = getComponent<Light2DComponent>();
 
-    return lightcomp.color;
+    return Color::linearTosRGB(lightcomp.color);
 }
 
 void Light2D::setIntensity(float intensity){
