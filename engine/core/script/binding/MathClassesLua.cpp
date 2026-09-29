@@ -34,6 +34,12 @@ namespace luabridge
     template<> struct Stack<RayFilter> : EnumWrapper<RayFilter>{};
 }
 
+// constants are returned as copies: bound by pointer, LuaBridge hands out a writable reference to them
+template <class T, const T& Value>
+static T constantCopy(){
+    return Value;
+}
+
 void LuaBinding::registerMathClasses(lua_State *L){
 #ifndef DISABLE_LUA_BINDINGS
 
@@ -55,12 +61,12 @@ void LuaBinding::registerMathClasses(lua_State *L){
             void(Vector2),
             void(Vector3), 
             void(Vector4)>()
-        .addStaticProperty("ZERO", &Vector2::ZERO)
-        .addStaticProperty("UNIT_X", &Vector2::UNIT_X)
-        .addStaticProperty("UNIT_Y", &Vector2::UNIT_Y)
-        .addStaticProperty("NEGATIVE_UNIT_X", &Vector2::NEGATIVE_UNIT_X)
-        .addStaticProperty("NEGATIVE_UNIT_Y", &Vector2::NEGATIVE_UNIT_Y)
-        .addStaticProperty("UNIT_SCALE", &Vector2::UNIT_SCALE)
+        .addStaticProperty("ZERO", &constantCopy<Vector2, Vector2::ZERO>)
+        .addStaticProperty("UNIT_X", &constantCopy<Vector2, Vector2::UNIT_X>)
+        .addStaticProperty("UNIT_Y", &constantCopy<Vector2, Vector2::UNIT_Y>)
+        .addStaticProperty("NEGATIVE_UNIT_X", &constantCopy<Vector2, Vector2::NEGATIVE_UNIT_X>)
+        .addStaticProperty("NEGATIVE_UNIT_Y", &constantCopy<Vector2, Vector2::NEGATIVE_UNIT_Y>)
+        .addStaticProperty("UNIT_SCALE", &constantCopy<Vector2, Vector2::UNIT_SCALE>)
         .addProperty("x", &Vector2::x, &Vector2::x)
         .addProperty("y", &Vector2::y, &Vector2::y)
         .addFunction("__tostring", &Vector2::toString)
@@ -102,11 +108,11 @@ void LuaBinding::registerMathClasses(lua_State *L){
             void(Vector2, const float),
             void(Vector3), 
             void(Vector4)>()
-        .addStaticProperty("ZERO", &Vector3::ZERO)
-        .addStaticProperty("UNIT_X", &Vector3::UNIT_X)
-        .addStaticProperty("UNIT_Y", &Vector3::UNIT_Y)
-        .addStaticProperty("UNIT_Z", &Vector3::UNIT_Z)
-        .addStaticProperty("UNIT_SCALE", &Vector3::UNIT_SCALE)
+        .addStaticProperty("ZERO", &constantCopy<Vector3, Vector3::ZERO>)
+        .addStaticProperty("UNIT_X", &constantCopy<Vector3, Vector3::UNIT_X>)
+        .addStaticProperty("UNIT_Y", &constantCopy<Vector3, Vector3::UNIT_Y>)
+        .addStaticProperty("UNIT_Z", &constantCopy<Vector3, Vector3::UNIT_Z>)
+        .addStaticProperty("UNIT_SCALE", &constantCopy<Vector3, Vector3::UNIT_SCALE>)
         .addProperty("x", &Vector3::x, &Vector3::x)
         .addProperty("y", &Vector3::y, &Vector3::y)
         .addProperty("z", &Vector3::z, &Vector3::z)
@@ -146,12 +152,12 @@ void LuaBinding::registerMathClasses(lua_State *L){
             void(Vector2, const float, const float),
             void(Vector3, const float), 
             void(Vector4)>()
-        .addStaticProperty("ZERO", &Vector4::ZERO)
-        .addStaticProperty("UNIT_X", &Vector4::UNIT_X)
-        .addStaticProperty("UNIT_Y", &Vector4::UNIT_Y)
-        .addStaticProperty("UNIT_Z", &Vector4::UNIT_Z)
-        .addStaticProperty("UNIT_W", &Vector4::UNIT_W)
-        .addStaticProperty("UNIT_SCALE", &Vector4::UNIT_SCALE)
+        .addStaticProperty("ZERO", &constantCopy<Vector4, Vector4::ZERO>)
+        .addStaticProperty("UNIT_X", &constantCopy<Vector4, Vector4::UNIT_X>)
+        .addStaticProperty("UNIT_Y", &constantCopy<Vector4, Vector4::UNIT_Y>)
+        .addStaticProperty("UNIT_Z", &constantCopy<Vector4, Vector4::UNIT_Z>)
+        .addStaticProperty("UNIT_W", &constantCopy<Vector4, Vector4::UNIT_W>)
+        .addStaticProperty("UNIT_SCALE", &constantCopy<Vector4, Vector4::UNIT_SCALE>)
         .addProperty("x", &Vector4::x, &Vector4::x)
         .addProperty("y", &Vector4::y, &Vector4::y)
         .addProperty("z", &Vector4::z, &Vector4::z)
@@ -308,7 +314,7 @@ void LuaBinding::registerMathClasses(lua_State *L){
             void(const float, const Vector3&),
             void(const Matrix3&),
             void(const Matrix4&)>()
-        .addStaticProperty("IDENTITY", &Quaternion::IDENTITY)
+        .addStaticProperty("IDENTITY", &constantCopy<Quaternion, Quaternion::IDENTITY>)
         .addProperty("w", &Quaternion::w, &Quaternion::w)
         .addProperty("x", &Quaternion::x, &Quaternion::x)
         .addProperty("y", &Quaternion::y, &Quaternion::y)
@@ -402,7 +408,7 @@ void LuaBinding::registerMathClasses(lua_State *L){
             void(AABB::BoxType), 
             void(const Vector3&, const Vector3&), 
             void(float, float, float, float, float, float)>()
-        .addStaticProperty("ZERO", &AABB::ZERO)
+        .addStaticProperty("ZERO", &constantCopy<AABB, AABB::ZERO>)
         .addProperty("minimum", (const Vector3&(AABB::*)() const)&AABB::getMinimum, (void(AABB::*)(const Vector3&))&AABB::setMinimum)
         .addFunction("setMinimum", (void(AABB::*)(float, float, float))&AABB::setMinimum)
         .addFunction("setMinimumX", &AABB::setMinimumX)
@@ -565,7 +571,7 @@ void LuaBinding::registerMathClasses(lua_State *L){
     luabridge::getGlobalNamespace(L)
         .beginClass<Ray>("Ray")
         .addConstructor<void(), void(Vector3, Vector3)>()
-        .addStaticProperty("NO_HIT", &Ray::NO_HIT)
+        .addStaticProperty("NO_HIT", &constantCopy<RayReturn, Ray::NO_HIT>)
         .addProperty("origin", &Ray::getOrigin, &Ray::setOrigin)
         .addProperty("direction", &Ray::getDirection, &Ray::setDirection)
         .addFunction("getPoint", &Ray::getPoint)
