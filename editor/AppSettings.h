@@ -97,6 +97,7 @@ private:
 
     // AI assistant settings (API keys are intentionally not stored here)
     static ai::Settings aiSettings;
+    static ai::McpSettings mcpSettings;
 
     // Private methods
     static void ensureConfigDirectory();
@@ -186,6 +187,8 @@ public:
     // AI assistant settings
     static ai::Settings getAiSettings();
     static void setAiSettings(const ai::Settings& settings);
+    static ai::McpSettings getMcpSettings();
+    static void setMcpSettings(const ai::McpSettings& settings);
 
     // Load and save settings
     static bool loadSettings();

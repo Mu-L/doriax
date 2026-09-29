@@ -2005,6 +2005,29 @@ EditorActionExecutor::EditorActionExecutor(Project* project, ResourcesWindow* re
     , httpClient(httpClient) {
 }
 
+std::string EditorActionExecutor::resultText(const ActionResult& result) {
+    std::string text = result.success ? result.message : ("Error: " + result.message);
+    if (!result.data.empty()) {
+        // Replace, not throw: file reads and logs can carry invalid UTF-8.
+        text += "\n" + result.data.dump(2, ' ', false, Json::error_handler_t::replace);
+    }
+    return text;
+}
+
+void EditorActionExecutor::logFailure(const ActionResult& result, const std::string& source) {
+    if (result.success) return;
+    switch (result.failureSeverity) {
+        case ActionFailureSeverity::ExpectedMiss:
+            break;
+        case ActionFailureSeverity::Warning:
+            Out::warning("%s action warning: %s", source.c_str(), result.message.c_str());
+            break;
+        case ActionFailureSeverity::Error:
+            Out::error("%s action failed: %s", source.c_str(), result.message.c_str());
+            break;
+    }
+}
+
 ActionResult EditorActionExecutor::execute(const std::string& name,
                                            const Json& arguments,
                                            const std::atomic<bool>* cancel) {

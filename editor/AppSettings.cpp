@@ -98,6 +98,7 @@ bool AppSettings::multiViewportEnabled = false;
 bool AppSettings::editorVSyncEnabled = true;
 PanelVisibilitySettings AppSettings::panelVisibility;
 ai::Settings AppSettings::aiSettings;
+ai::McpSettings AppSettings::mcpSettings;
 
 bool AppSettings::initialize() {
     // Settings live in the working directory, where a run from a build tree
@@ -287,6 +288,14 @@ bool AppSettings::loadSettings() {
             }
         }
 
+        // Load MCP server settings (no token)
+        if (settingsData["mcp_server"]) {
+            auto mcpNode = settingsData["mcp_server"];
+            if (mcpNode["enabled"]) mcpSettings.enabled = mcpNode["enabled"].as<bool>();
+            if (mcpNode["port"]) mcpSettings.port = std::clamp(mcpNode["port"].as<int>(), 1024, 65535);
+            if (mcpNode["allow_changes"]) mcpSettings.allowChanges = mcpNode["allow_changes"].as<bool>();
+        }
+
         return true;
     } catch (const std::exception& e) {
         Out::error("Failed to load settings: %s", e.what());
@@ -409,6 +418,12 @@ bool AppSettings::saveSettings() {
         aiNode["max_output_tokens"] = aiSettings.maxOutputTokens;
         aiNode["max_tool_rounds"] = aiSettings.maxToolRounds;
         settingsData["ai_assistant"] = aiNode;
+
+        YAML::Node mcpNode;
+        mcpNode["enabled"] = mcpSettings.enabled;
+        mcpNode["port"] = mcpSettings.port;
+        mcpNode["allow_changes"] = mcpSettings.allowChanges;
+        settingsData["mcp_server"] = mcpNode;
 
         // Save to file
         std::ofstream fout(configFilePath.string());
@@ -641,6 +656,14 @@ void AppSettings::setAiSettings(const ai::Settings& settings) {
         aiSettings.model = ai::defaultModelForProvider(aiSettings.provider);
     }
     saveSettings();
+}
+
+ai::McpSettings AppSettings::getMcpSettings() {
+    return mcpSettings;
+}
+
+void AppSettings::setMcpSettings(const ai::McpSettings& settings) {
+    mcpSettings = settings;
 }
 
 } // namespace doriax::editor

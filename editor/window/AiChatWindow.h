@@ -7,7 +7,6 @@
 #include "ai/AiService.h"
 #include "ai/ConversationStore.h"
 #include "ai/ModelCatalog.h"
-#include "window/dialog/AiSettingsWindow.h"
 #include "window/widget/SelectableTextView.h"
 
 #include <array>
@@ -20,8 +19,8 @@ namespace doriax::editor {
 
 class ResourcesWindow;
 
-// Clean, Copilot-style chat surface. Provider/key details live in
-// AiSettingsWindow; quick conversation controls live with the composer.
+// Clean, Copilot-style chat surface. Provider/key details live in the AI tab
+// of Editor Settings; quick conversation controls live with the composer.
 class AiChatWindow {
 private:
     enum class MentionKind {
@@ -60,7 +59,6 @@ private:
     ai::AiService service;
     ai::ConversationStore conversationStore;
     ai::ModelCatalog modelCatalog;
-    AiSettingsWindow settingsWindow;
     SelectableTextView transcript;
     MentionState mention;
     int mentionDisplayCursor = 0;
@@ -160,6 +158,9 @@ public:
 
     // Wakes the backend loop from the AI worker instead of waiting out its idle tick.
     void setWakeCallback(std::function<void()> callback);
+
+    // Takes the AI settings saved by Editor Settings.
+    void reloadSettings();
 
     // Stops the AI worker: this window is never deleted, so ~AiService never runs.
     void shutdown();

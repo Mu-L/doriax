@@ -24,6 +24,11 @@ public:
                          const Json& arguments,
                          const std::atomic<bool>* cancel = nullptr);
 
+    // What the model reads: the message, then any data as JSON
+    static std::string resultText(const ActionResult& result);
+    // Logs a failure at its severity; source is who ran it, "AI" or "MCP"
+    static void logFailure(const ActionResult& result, const std::string& source);
+
 private:
     Project* project;
     ResourcesWindow* resourcesWindow;

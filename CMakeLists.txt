@@ -119,6 +119,7 @@ if(APPLE)
 endif()
 
 set(IMGUI_DIR libs/imgui)
+set(HTTPLIB_DIR libs/cpp-httplib)
 set(EDITOR_DIR editor)
 set(DORIAX_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/engine)
 
@@ -532,6 +533,7 @@ set(DORIAX_EDITOR_SOURCES
     ${EDITOR_DIR}/ai/EditorActionExecutor.cpp
     ${EDITOR_DIR}/ai/EditorActionRegistry.cpp
     ${EDITOR_DIR}/ai/HttpClient.cpp
+    ${EDITOR_DIR}/ai/McpServer.cpp
     ${EDITOR_DIR}/ai/ModelCatalog.cpp
     ${EDITOR_DIR}/ai/RateLimitRetry.cpp
     ${EDITOR_DIR}/ai/SecretStore.cpp
@@ -579,7 +581,6 @@ set(DORIAX_EDITOR_SOURCES
     ${EDITOR_DIR}/window/dialog/BundlesWindow.cpp
     ${EDITOR_DIR}/window/dialog/AboutWindow.cpp
     ${EDITOR_DIR}/window/dialog/ScenesWindow.cpp
-    ${EDITOR_DIR}/window/dialog/AiSettingsWindow.cpp
     ${EDITOR_DIR}/window/widget/CustomTextEditor.cpp
     ${EDITOR_DIR}/window/widget/InputTextContextMenu.cpp
     ${EDITOR_DIR}/window/widget/SemanticSuggestions.cpp
@@ -654,6 +655,7 @@ function(configure_doriax_editor_target target_name)
     target_include_directories(${target_name} SYSTEM PRIVATE
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
+        ${HTTPLIB_DIR}
         ${OPENGL_INCLUDE_DIR}
     )
 
@@ -676,8 +678,8 @@ function(configure_doriax_editor_target target_name)
     )
 
     if(WIN32)
-        # dbghelp resolves the crash-report backtrace.
-        target_link_libraries(${target_name} PRIVATE winhttp shell32 dbghelp)
+        # dbghelp resolves the crash-report backtrace; ws2_32 serves MCP.
+        target_link_libraries(${target_name} PRIVATE winhttp shell32 dbghelp ws2_32)
     else()
         target_link_libraries(${target_name} PRIVATE CURL::libcurl)
         # -rdynamic names the editor's own frames in the crash backtrace, at about 10 MB of

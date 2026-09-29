@@ -24,6 +24,7 @@
 #include "Out.h"
 #include "AppSettings.h"
 #include "Theme.h"
+#include "ai/McpServer.h"
 #include "resources/fonts/fa-solid-900_ttf.h"
 #include "resources/fonts/jetbrains-mono-regular_ttf.h"
 //#include "recources/fonts/roboto-v20-latin-regular_ttf.h"
@@ -105,6 +106,7 @@ editor::App::App(){
     animationWindow = new AnimationWindow(&project);
     terrainEditWindow = new TerrainEditWindow(&project);
     aiChatWindow = new AiChatWindow(&project, resourcesWindow);
+    mcpServer = new ai::McpServer(&project, resourcesWindow);
 
     isInitialized = false;
     dockspaceNeedsRebuild = false;
@@ -1442,6 +1444,8 @@ void editor::App::setup() {
         dpiScale = ImGui::GetPlatformIO().Monitors[0].DpiScale;
     }
     Theme::applyDpiScale(dpiScale);
+
+    mcpServer->applySettings(AppSettings::getMcpSettings());
 }
 
 bool editor::App::canEditSelection(bool duplicate) {
@@ -2341,12 +2345,14 @@ void editor::App::finishBenchmark() {
 
 void editor::App::enqueueMainThreadTask(std::function<void()> task) {
     if (!task) return;
+    std::function<void()> wake;
     {
         std::lock_guard<std::mutex> lock(mainThreadTaskMutex);
         mainThreadTasks.push(std::move(task));
+        wake = wakeCallback;
     }
     // Wake an idle backend loop so cross-thread work runs promptly.
-    if (wakeCallback) wakeCallback();
+    if (wake) wake();
 }
 
 bool editor::App::hasPendingMainThreadTasks() {
@@ -2377,7 +2383,11 @@ bool editor::App::consumeFrameRequest() {
 }
 
 void editor::App::setWakeCallback(std::function<void()> cb) {
-    wakeCallback = cb;
+    {
+        // Worker threads read it in enqueueMainThreadTask()
+        std::lock_guard<std::mutex> lock(mainThreadTaskMutex);
+        wakeCallback = cb;
+    }
     // The AI service keeps its own copy, so nothing it holds points back here.
     if (aiChatWindow) aiChatWindow->setWakeCallback(std::move(cb));
 }
@@ -2387,6 +2397,8 @@ void editor::App::shutdownBackgroundWork() {
     pendingProjectChange = nullptr;
     // Before glfwTerminate/SDL_Quit, or a late reply posts to a dead window system.
     if (aiChatWindow) aiChatWindow->shutdown();
+    if (mcpServer) mcpServer->shutdown();
+    std::lock_guard<std::mutex> lock(mainThreadTaskMutex);
     wakeCallback = nullptr;
 }
 
@@ -2769,6 +2781,18 @@ editor::Structure* editor::App::getStructureWindow() const{
     return structureWindow;
 }
 
+editor::AiChatWindow* editor::App::getAiChatWindow() const{
+    return aiChatWindow;
+}
+
+editor::ai::McpServer* editor::App::getMcpServer() const{
+    return mcpServer;
+}
+
+void editor::App::openEditorSettings(EditorSettingsWindow::Tab tab){
+    editorSettingsWindow.open(&project, tab);
+}
+
 void editor::App::processNextSaveDialog() {
     // Check if there's anything to process and no dialogs are currently open
     if (saveDialogInProgress || saveDialogQueue.empty() || sceneSaveDialog.isOpen() || projectSaveDialog.isOpen()) {
@@ -3014,8 +3038,14 @@ void editor::App::exit() {
             "Unsaved Changes",
             "There are unsaved changes. Do you want to save them before exiting?",
             [this]() {
-                saveAllAndProject([this]() {
-                    closeWindow();
+                // No agent edit may land after the save; a failed save brings the server back
+                mcpServer->shutdown();
+                saveAllFunc([this](bool success) {
+                    if (success) {
+                        closeWindow();
+                    } else {
+                        mcpServer->applySettings(AppSettings::getMcpSettings());
+                    }
                 });
             },
             [this]() {
@@ -3033,6 +3063,9 @@ void editor::App::exit() {
 }
 
 void editor::App::closeWindow(){
+    // Agents must not change the project while it closes
+    mcpServer->shutdown();
+
     // A moved camera, a different selected scene and a changed terrain brush live
     // only in the model until this runs, and nothing else asks for it. Also flushes
     // a tab reorder still sitting in captureTabOrder()'s debounce.

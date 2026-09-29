@@ -77,6 +77,13 @@ struct Settings {
     int maxToolRounds = 24;
 };
 
+struct McpSettings {
+    bool enabled = false;
+    int port = 3674;
+    // Off: agents only get the read-only tools
+    bool allowChanges = true;
+};
+
 struct ToolCall {
     std::string id;
     std::string name;

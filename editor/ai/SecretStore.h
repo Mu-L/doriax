@@ -14,7 +14,7 @@ namespace doriax::editor::ai {
 // config directory, lightly obfuscated with a machine-derived keystream so they
 // are not written in plaintext. This protects against casual reads and is not as
 // strong as an OS keychain. Accounts are the ids from ai::accountKey(), so every
-// provider and custom endpoint holds its own key.
+// provider and custom endpoint holds its own key. The MCP token is under "mcp_server".
 class SecretStore {
 public:
     static void setApiKey(const std::string& account, const std::string& key);

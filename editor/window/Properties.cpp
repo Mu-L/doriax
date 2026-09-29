@@ -13768,23 +13768,19 @@ void editor::Properties::show(){
         thumbnailTextures.clear();
     }
 
-    // Clean up unused material renders
+    // Clean up unused material renders whose scene is not running
     for (auto it = materialRenders.begin(); it != materialRenders.end(); ) {
-        if (usedPreviewIds.find(it->first) == usedPreviewIds.end()) {
-            if (!Engine::isSceneRunning(it->second.getScene())){
-                it = materialRenders.erase(it);
-            }
+        if (usedPreviewIds.find(it->first) == usedPreviewIds.end() && !Engine::isSceneRunning(it->second.getScene())) {
+            it = materialRenders.erase(it);
         } else {
             ++it;
         }
     }
 
-    // Clean up unused direction renders
+    // Clean up unused direction renders whose scene is not running
     for (auto it = directionRenders.begin(); it != directionRenders.end(); ) {
-        if (usedPreviewIds.find(it->first) == usedPreviewIds.end()) {
-            if (!Engine::isSceneRunning(it->second.getScene())){
-                it = directionRenders.erase(it);
-            }
+        if (usedPreviewIds.find(it->first) == usedPreviewIds.end() && !Engine::isSceneRunning(it->second.getScene())) {
+            it = directionRenders.erase(it);
         } else {
             ++it;
         }

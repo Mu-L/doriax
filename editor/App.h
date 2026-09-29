@@ -42,6 +42,8 @@
 
 namespace doriax::editor{
 
+    namespace ai { class McpServer; }
+
     enum class AlertType {
         Info,
         Confirm,
@@ -137,6 +139,7 @@ namespace doriax::editor{
         AnimationWindow* animationWindow;
         TerrainEditWindow* terrainEditWindow;
         AiChatWindow* aiChatWindow;
+        ai::McpServer* mcpServer;
 
         LoadingWindow* loadingWindow;
 
@@ -327,6 +330,9 @@ namespace doriax::editor{
         AnimationWindow* getAnimationWindow() const;
         Structure* getStructureWindow() const;
         TerrainEditWindow* getTerrainEditWindow() const;
+        AiChatWindow* getAiChatWindow() const;
+        ai::McpServer* getMcpServer() const;
+        void openEditorSettings(EditorSettingsWindow::Tab tab);
 
         // Window settings methods. Sizes are physical pixels, converted between
         // the saved scale and the uiScale the backend is opening the window on.

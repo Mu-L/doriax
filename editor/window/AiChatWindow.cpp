@@ -928,6 +928,10 @@ void AiChatWindow::setWakeCallback(std::function<void()> callback) {
     service.setWakeCallback(std::move(callback));
 }
 
+void AiChatWindow::reloadSettings() {
+    service.setSettings(AppSettings::getAiSettings());
+}
+
 void AiChatWindow::shutdown() {
     service.shutdown();
 }
@@ -996,7 +1000,6 @@ void AiChatWindow::show() {
         windowFocused = false;
         isWindowVisible = false;
         ImGui::End();
-        settingsWindow.show();
         return;
     }
     if (hasNotification) App::popTabNotificationStyle();
@@ -1046,9 +1049,6 @@ void AiChatWindow::show() {
     drawComposer(inputHeight);
 
     ImGui::End();
-
-    // Rendered at the root level so the modal floats above the chat window.
-    settingsWindow.show();
 }
 
 void AiChatWindow::setOpen(bool open) {
@@ -1103,7 +1103,7 @@ void AiChatWindow::drawHeader() {
 
     ImGui::SameLine();
     if (Widgets::iconButton("##AiSettings", ICON_FA_GEAR, buttonSize)) {
-        settingsWindow.open(&service);
+        Backend::getApp().openEditorSettings(EditorSettingsWindow::Tab::AI);
     }
     ImGui::SetItemTooltip("AI settings");
 }
@@ -1214,7 +1214,7 @@ void AiChatWindow::drawTranscript(float height) {
         if (ai::SecretStore::configuredAccounts(service.getSettings()).empty()) {
             ImGui::Spacing();
             if (ImGui::Button(ICON_FA_KEY " Set API key")) {
-                settingsWindow.open(&service);
+                Backend::getApp().openEditorSettings(EditorSettingsWindow::Tab::AI);
             }
         }
         ImGui::EndChild();
@@ -2519,7 +2519,7 @@ void AiChatWindow::drawModelPopup() {
     if (accounts.empty()) {
         ImGui::TextDisabled("No providers configured");
         if (ImGui::Selectable("Add an API key...")) {
-            settingsWindow.open(&service);
+            Backend::getApp().openEditorSettings(EditorSettingsWindow::Tab::AI);
             ImGui::CloseCurrentPopup();
         }
         keepCurrentWindowInsideViewport();

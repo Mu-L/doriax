@@ -5,6 +5,7 @@ build-release
 settings.yaml
 editor_layout.ini
 editor.log
+ai_keys.dat
 
 ### Linux ###
 *~
