@@ -8409,18 +8409,26 @@ void editor::Properties::drawScriptComponent(ComponentType cpType, SceneProject*
     propertyHeader("Scripts", -1, false, false);
     ImGui::Text("%zu", firstScriptComp.scripts.size());
     if (drawSummaryAddButton(ICON_FA_PLUS " Add Script##script_add")) {
-        MultiPropertyCmd* multiCmd = new MultiPropertyCmd();
-        for (const Entity& entity : entities) {
-            ScriptComponent& sc = sceneProject->scene->getComponent<ScriptComponent>(entity);
-            std::vector<ScriptEntry> newScripts = sc.scripts;
-            ScriptEntry entry;
-            entry.type = ScriptType::CPP;
-            entry.enabled = true;
-            newScripts.push_back(entry);
-            multiCmd->addPropertyCmd<std::vector<ScriptEntry>>(project, sceneProject->id, entity, ComponentType::ScriptComponent, "scripts", newScripts);
+        ImGui::OpenPopup("script_add_menu");
+    }
+    if (ImGui::BeginPopup("script_add_menu")) {
+        bool addLua = ImGui::MenuItem("Lua Script");
+        bool addCpp = ImGui::MenuItem("C++ Script");
+        if (addLua || addCpp) {
+            MultiPropertyCmd* multiCmd = new MultiPropertyCmd();
+            for (const Entity& entity : entities) {
+                ScriptComponent& sc = sceneProject->scene->getComponent<ScriptComponent>(entity);
+                std::vector<ScriptEntry> newScripts = sc.scripts;
+                ScriptEntry entry;
+                entry.type = addLua ? ScriptType::LUA : ScriptType::CPP;
+                entry.enabled = true;
+                newScripts.push_back(entry);
+                multiCmd->addPropertyCmd<std::vector<ScriptEntry>>(project, sceneProject->id, entity, ComponentType::ScriptComponent, "scripts", newScripts);
+            }
+            multiCmd->setNoMerge();
+            CommandHandle::get(project->getSelectedSceneId())->addCommand(multiCmd);
         }
-        multiCmd->setNoMerge();
-        CommandHandle::get(project->getSelectedSceneId())->addCommand(multiCmd);
+        ImGui::EndPopup();
     }
     endTable();
 
@@ -8599,7 +8607,7 @@ void editor::Properties::drawScriptComponent(ComponentType cpType, SceneProject*
                 ImGui::OpenPopup(("Edit Script##" + std::to_string(scriptIdx)).c_str());
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Edit script details: class name, header and source files");
+                ImGui::SetTooltip("Edit script details");
             }
 
             ImGui::PopStyleVar();
@@ -8633,7 +8641,7 @@ void editor::Properties::drawScriptComponent(ComponentType cpType, SceneProject*
                 beginTable(cpType, getLabelSize("Source Path"), "edit_script_details");
 
                 // Class Name
-                propertyHeader("Class Name", secondColSize);
+                propertyHeader(script.type == ScriptType::LUA ? "Module Name" : "Class Name", secondColSize);
                 if (ImGui::InputText("##new_name", nameBuffer, sizeof(nameBuffer),
                         ImGuiInputTextFlags_CallbackCharFilter,
                         ScriptCreateDialog::classNameCharFilter)) {
