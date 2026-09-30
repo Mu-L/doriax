@@ -36,6 +36,12 @@ bool hasOwnedComponent(Scene* scene, Entity entity, editor::ComponentType compon
     return false;
 }
 
+// Bundle roots have no registry entity, so their components are local
+bool isSharedComponent(const editor::EntityBundle* bundle, uint32_t sceneId, Entity entity, editor::ComponentType componentType) {
+    return bundle && bundle->getRegistryEntity(sceneId, entity) != NULL_ENTITY &&
+        !bundle->hasComponentOverride(sceneId, entity, componentType);
+}
+
 }
 
 editor::RemoveComponentCmd::RemoveComponentCmd(Project* project, size_t sceneId, Entity entity, ComponentType componentType){
@@ -72,17 +78,12 @@ bool editor::RemoveComponentCmd::execute() {
             for (const RemoveComponentData& entityData : entities) {
                 fs::path bundlePath = project->findEntityBundlePathFor(sceneId, entityData.entity);
                 EntityBundle* bundle = project->getEntityBundle(bundlePath);
-                bool sharedComponent = bundle &&
-                    !bundle->hasComponentOverride(sceneId, entityData.entity, componentType);
-                if (!sharedComponent) {
+                if (!isSharedComponent(bundle, sceneId, entityData.entity, componentType)) {
                     addOwner(sceneId, entityData.entity);
                     continue;
                 }
 
                 Entity registryEntity = bundle->getRegistryEntity(sceneId, entityData.entity);
-                if (registryEntity == NULL_ENTITY) {
-                    continue;
-                }
                 for (const auto& [otherSceneId, instances] : bundle->instances) {
                     SceneProject* otherScene = project->getScene(otherSceneId);
                     if (!otherScene || !otherScene->scene) {
@@ -164,7 +165,7 @@ bool editor::RemoveComponentCmd::execute() {
                 continue;
             }
 
-            if (bundle && !bundle->hasComponentOverride(sceneId, entityData.entity, componentType)){
+            if (isSharedComponent(bundle, sceneId, entityData.entity, componentType)){
 
                 entityData.recovery = project->removeComponentFromBundle(sceneId, entityData.entity, componentType);
 

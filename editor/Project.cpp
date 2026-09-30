@@ -6356,6 +6356,11 @@ bool editor::Project::addComponentToBundle(uint32_t sceneId, Entity entity, Comp
     EntityBundle* bundle = getEntityBundle(filepath);
     uint32_t instanceId = bundle->getInstanceId(sceneId, entity);
 
+    // Bundle roots don't have registry entities; their components are per-instance
+    if (bundle->getRootEntity(sceneId, entity) == entity) {
+        return true;
+    }
+
     if (bundle->hasComponentOverride(sceneId, entity, componentType)){
         Out::warning("Component %s of entity %u in scene %u is overridden", Catalog::getComponentName(componentType).c_str(), entity, sceneId);
         return false;
@@ -6436,6 +6441,11 @@ editor::ComponentRecovery editor::Project::removeComponentFromBundle(uint32_t sc
 
     EntityBundle* bundle = getEntityBundle(filepath);
     uint32_t instanceId = bundle->getInstanceId(sceneId, entity);
+
+    // Bundle roots don't have registry entities; their components are per-instance
+    if (bundle->getRootEntity(sceneId, entity) == entity) {
+        return {};
+    }
 
     if (bundle->hasComponentOverride(sceneId, entity, componentType)){
         Out::warning("Component %s of entity %u in scene %u is overridden", Catalog::getComponentName(componentType).c_str(), entity, sceneId);
