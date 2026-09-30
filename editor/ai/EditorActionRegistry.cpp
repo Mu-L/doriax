@@ -419,7 +419,7 @@ const std::vector<ToolDefinition>& cachedTools() {
         },
         {
             "create_scene",
-            "Create a new 2D, 3D, or UI scene in the project.",
+            "Create a new 2D, 3D, or UI scene in the project and select it. The previously selected scene closes, so reopen it with open_scene before changing it again.",
             objectSchema({
                 {"name", stringSchema("Scene name")},
                 {"type", stringSchema("Scene type: 3d, 2d, or ui")}
@@ -437,9 +437,10 @@ const std::vector<ToolDefinition>& cachedTools() {
         },
         {
             "save_scene",
-            "Save one scene. Omit scene_id to save the selected scene.",
+            "Save one scene. Omit scene_id to save the selected scene. A scene that was never saved needs path, or the editor asks the user with a save dialog instead.",
             objectSchema({
-                {"scene_id", integerSchema("Scene id. Omit to use the selected scene")}
+                {"scene_id", integerSchema("Scene id. Omit to use the selected scene")},
+                {"path", stringSchema("Project-relative .scene path for a scene that has no file yet, e.g. scenes/Level1.scene")}
             }),
             false
         },
@@ -1031,9 +1032,43 @@ const std::vector<ToolDefinition>& cachedTools() {
         },
         {
             "save_project",
-            "Save the project file and project metadata.",
-            objectSchema({}),
+            "Save the project file and project metadata. A temporary project (get_project_summary path under the system temp folder) is lost unless saved with path, which moves it there.",
+            objectSchema({
+                {"path", stringSchema("Absolute directory to move a temporary project to; it must be empty or not exist yet")},
+                {"name", stringSchema("New project name, used with path")}
+            }),
             false
+        },
+        {
+            "set_project_settings",
+            "Change project display settings; fields left out keep their value. The canvas is the game's coordinate space in points (2D scenes and UI are laid out on it) and scaling_mode fits it to the window: fitwidth, fitheight, letterbox (the whole canvas stays visible), crop, stretch, or native.",
+            objectSchema({
+                {"canvas_width", integerSchema("Canvas width in points")},
+                {"canvas_height", integerSchema("Canvas height in points")},
+                {"scaling_mode", stringSchema("fitwidth, fitheight, letterbox, crop, stretch, or native")},
+                {"window_width", integerSchema("Desktop window width in pixels")},
+                {"window_height", integerSchema("Desktop window height in pixels")}
+            }),
+            false
+        },
+        {
+            "create_project",
+            "Create a new project in an empty or new directory and open it in place of the current one, which must have no unsaved changes. It starts with an unsaved 3D scene named New Scene. Later calls wait until it has loaded.",
+            objectSchema({
+                {"path", stringSchema("Absolute directory for the project; it must be empty or not exist yet")},
+                {"name", stringSchema("Project name. Defaults to the directory name")}
+            }, {"path"}),
+            false,
+            true
+        },
+        {
+            "open_project",
+            "Open an existing project directory (one holding project.yaml) in place of the current one, which must have no unsaved changes. Later calls wait until it has loaded.",
+            objectSchema({
+                {"path", stringSchema("Absolute project directory")}
+            }, {"path"}),
+            false,
+            true
         },
         {
             "copy_resource",
@@ -1284,6 +1319,8 @@ std::string EditorActionRegistry::guidance() {
         << "2D scenes have a dedicated lighting model: create_entity light_2d adds a Light2DComponent (radius/falloff point light) and occluder_2d adds an Occluder2DComponent (shadow caster). Light2D adds on top of the scene's 2D ambient (set_scene_property ambient_light_2d_color/ambient_light_2d_intensity), so dim the ambient to make 2D lights visible. Occluder2D shape AUTO_QUAD derives its outline from a sibling mesh; POLYGON uses its own points. Enable a Light2D's shadows property to cast from occluders. Shadow edge smoothness is per scene: shadows_quality (3D) and shadows_2d_quality (2D) take int_value 0=none/1=low/2=medium/3=high. These are separate from the 3D Light/global_illumination path.\n"
         << "For requested 3D physics or collisions on an existing visible model/mesh, inspect the entity and use add_body3d_shape. It adds Body3DComponent and its collision Shape3D to that SAME entity atomically; never create a separate body entity unless the user explicitly asks for one. A Body3DComponent without at least one shape does not collide. Use dynamic for player/rigid-body actors and static for floors, terrain, and level geometry; a dynamic character needs a static collision shape under it. Shape dimensions and local position are in mesh-local units and the engine multiplies them by the entity's transform scale on its own, so NEVER pre-divide or pre-multiply a size by the scale to compensate. Never guess a collider size: omit the size arguments so the shape is fitted to the mesh's measured bounds, or read mesh_bounds.local_size from inspect_entity and pass that. If the user says a collider is too big or too small, do not nudge numbers by feel; re-read mesh_bounds and set the shape to the measured local size. Growing a shape's height expands it equally up and down about its centre, so shift the shape position by half the added height to keep the bottom in place. For physics-based jumping, add the body and collision shape before editing the controller, use confirmed Body3D physics APIs, and never describe manually changing an entity transform as physics.\n"
         << "For requested 2D physics or collisions on an existing sprite, tilemap, or 2D mesh, inspect the entity and use add_body2d_shape. It adds Body2DComponent and its Shape2D to that SAME entity atomically; never create a separate body entity unless explicitly requested. A Body2DComponent without a shape does not collide. Use dynamic for actors and static for ground/platforms, and use the requested primitive or polygon/chain points in entity-local 2D units. As in 3D these are mesh-local and the engine multiplies them by the entity scale, so never pre-divide a size to compensate; read mesh_bounds.local_size from inspect_entity instead of guessing. Do not confuse Body2D with Body3D or claim transform-only movement is physics.\n"
+        << "Box2D reports begin/end contacts (PhysicsSystem beginContact2D/endContact2D) only for pairs where at least one shape has contactEvents on, and it is off by default: set shapes[i].contactEvents with set_component_property first.\n"
+        << "UI entities (text, image, button, ...) are laid out in their scene's camera space: the canvas in a 2D or UI scene, but the world in a 3D scene. A 3D game's HUD therefore goes in a UI scene attached with add_child_scene.\n"
         << "For external assets, use curated sources only and preserve license/author/source attribution.\n"
         << "For scripts and engine API code, the Doriax engine source under the editor's engine/ directory (read it with search_engine_source and read_engine_source) is the ONLY source of truth. Use ONLY classes, methods, properties, enums, macros, and constructor overloads you have confirmed exist in that source; if a symbol is not present there it does not exist in Doriax, so do not use it. Never invent APIs or carry over names, macros, or patterns from other engines or frameworks (e.g. Godot GDCLASS, Unreal GENERATED_BODY/UPROPERTY, Qt Q_OBJECT). search_engine_api is only a quick index into that same source; when a symbol is unfamiliar or you are unsure of its exact spelling or overloads, confirm it in the source before writing it (e.g. key codes are Input.KEY_* in Lua but D_KEY_* macros in C++, and Quaternion's axis-angle constructor takes the angle first: Quaternion(angle, axis)).\n"
         << "A C++ method existing on a class does NOT mean Lua can call it. LuaBridge binds many accessors as properties instead of methods, and calling the accessor from Lua fails at runtime with \"attempt to call a nil value (method 'x')\". search_engine_api marks this: kind 'Method' with a ':' in the detail (Body2D:getMass()) is Lua-callable, while kind 'CppMethod' with '::' in the detail (Object::getPosition(), Body3D::setLinearVelocity()) is C++ only and carries lua_callable=false plus a lua_note naming the property to use (object.position, body.linearVelocity). In Lua, read and assign those properties (self.sphere.position = p, body.linearVelocity = Vector3(0,0,0)); never translate a CppMethod into obj:getX()/obj:setX(). If a class has no bound property for what you need either, check the LuaBridge binding source under engine/core/script/binding/ before writing the call.\n"
@@ -1689,8 +1726,23 @@ ValidationResult EditorActionRegistry::validate(const std::string& name, const J
     if (name == "regenerate_mesh_geometry") {
         return hasEntitySelector(arguments) ? ok() : fail("regenerate_mesh_geometry requires entity_id or entity_name.");
     }
+    if (name == "save_scene") {
+        return isWrongTypedString(arguments, "path") ? fail("save_scene path must be a string.") : ok();
+    }
     if (name == "save_project") {
-        return ok();
+        return isWrongTypedString(arguments, "path") || isWrongTypedString(arguments, "name")
+            ? fail("save_project path and name must be strings.") : ok();
+    }
+    if (name == "set_project_settings") {
+        for (const char* key : {"canvas_width", "canvas_height", "window_width", "window_height"}) {
+            if (arguments.contains(key) && (!arguments[key].is_number_integer() || arguments[key].get<int>() <= 0)) {
+                return fail(std::string("set_project_settings ") + key + " must be a positive integer.");
+            }
+        }
+        return isWrongTypedString(arguments, "scaling_mode") ? fail("set_project_settings scaling_mode must be a string.") : ok();
+    }
+    if (name == "create_project" || name == "open_project") {
+        return hasString(arguments, "path") ? ok() : fail(name + " requires path.");
     }
     if (name == "copy_resource") {
         return hasString(arguments, "source_path") && hasString(arguments, "target_dir")
@@ -1769,12 +1821,12 @@ std::string EditorActionRegistry::describe(const std::string& name, const Json& 
     }
     if (name == "list_scene_entities") {
         return arguments.contains("scene_id")
-            ? "List entities in scene " + std::to_string(arguments.value("scene_id", 0))
+            ? "List entities in scene " + std::to_string(arguments.value("scene_id", 0u))
             : "List entities in the selected scene";
     }
     if (name == "inspect_entity") {
         return arguments.contains("entity_id")
-            ? "Inspect entity " + std::to_string(arguments.value("entity_id", 0))
+            ? "Inspect entity " + std::to_string(arguments.value("entity_id", 0u))
             : "Inspect entity \"" + arguments.value("entity_name", "") + "\"";
     }
     if (name == "inspect_component") {
@@ -1854,13 +1906,13 @@ std::string EditorActionRegistry::describe(const std::string& name, const Json& 
         return "Rename scene to \"" + arguments.value("new_name", "") + "\"";
     }
     if (name == "save_scene") {
-        return "Save scene";
+        return hasString(arguments, "path") ? "Save scene to " + arguments["path"].get<std::string>() : "Save scene";
     }
     if (name == "save_all_scenes") {
         return "Save all scenes";
     }
     if (name == "set_start_scene") {
-        return "Set startup scene " + std::to_string(arguments.value("scene_id", 0));
+        return "Set startup scene " + std::to_string(arguments.value("scene_id", 0u));
     }
     if (name == "set_scene_property") {
         return "Set scene property " + arguments.value("property", "");
@@ -1873,10 +1925,10 @@ std::string EditorActionRegistry::describe(const std::string& name, const Json& 
         return action + " play mode";
     }
     if (name == "add_child_scene") {
-        return "Add child scene " + std::to_string(arguments.value("child_scene_id", 0));
+        return "Add child scene " + std::to_string(arguments.value("child_scene_id", 0u));
     }
     if (name == "remove_child_scene") {
-        return "Remove child scene " + std::to_string(arguments.value("child_scene_id", 0));
+        return "Remove child scene " + std::to_string(arguments.value("child_scene_id", 0u));
     }
     if (name == "set_child_scene_start_active") {
         return std::string(arguments.value("start_active", true) ? "Enable" : "Disable") + " child scene Start active";
@@ -1984,7 +2036,7 @@ std::string EditorActionRegistry::describe(const std::string& name, const Json& 
     }
     if (name == "fork_shader") {
         if (arguments.contains("entity_id")) {
-            return "Fork shader for entity " + std::to_string(arguments.value("entity_id", 0));
+            return "Fork shader for entity " + std::to_string(arguments.value("entity_id", 0u));
         }
         if (arguments.contains("entity_name")) {
             return "Fork shader for \"" + arguments.value("entity_name", "") + "\"";
@@ -2032,7 +2084,7 @@ std::string EditorActionRegistry::describe(const std::string& name, const Json& 
     }
     if (name == "inspect_scene") {
         return arguments.contains("scene_id")
-            ? "Inspect scene " + std::to_string(arguments.value("scene_id", 0))
+            ? "Inspect scene " + std::to_string(arguments.value("scene_id", 0u))
             : "Inspect selected scene";
     }
     if (name == "set_main_camera") {
@@ -2042,16 +2094,25 @@ std::string EditorActionRegistry::describe(const std::string& name, const Json& 
         return "Open scene " + arguments.value("scene_path", "");
     }
     if (name == "select_scene") {
-        return "Select scene " + std::to_string(arguments.value("scene_id", 0));
+        return "Select scene " + std::to_string(arguments.value("scene_id", 0u));
     }
     if (name == "regenerate_mesh_geometry") {
         return "Regenerate mesh geometry";
     }
     if (name == "delete_scene") {
-        return "Delete scene " + std::to_string(arguments.value("scene_id", 0));
+        return "Delete scene " + std::to_string(arguments.value("scene_id", 0u));
     }
     if (name == "save_project") {
-        return "Save project";
+        return hasString(arguments, "path") ? "Save project to " + arguments["path"].get<std::string>() : "Save project";
+    }
+    if (name == "set_project_settings") {
+        return "Change project settings";
+    }
+    if (name == "create_project") {
+        return "Create project " + arguments.value("path", "");
+    }
+    if (name == "open_project") {
+        return "Open project " + arguments.value("path", "");
     }
     if (name == "copy_resource") {
         return "Copy " + arguments.value("source_path", "") + " to " + arguments.value("target_dir", "");

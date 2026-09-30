@@ -7,6 +7,7 @@
 #include "AiEngineApiContext.h"
 #include "AiTerrainCapability.h"
 #include "EditorActionRegistry.h"
+#include "EditorHost.h"
 #include "HttpClient.h"
 
 #include "Out.h"
@@ -66,6 +67,7 @@
 #include "util/ShapeParameters.h"
 #include "texture/Texture.h"
 #include "util/Util.h"
+#include "window/CodeEditor.h"
 #include "window/ResourcesWindow.h"
 
 #include "yaml-cpp/yaml.h"
@@ -708,10 +710,12 @@ uint32_t resolveSceneId(Project* project, const Json& args) {
 
 Entity resolveEntity(SceneProject* sceneProject, const Json& args) {
     if (!sceneProject || !sceneProject->scene) return NULL_ENTITY;
+    // Scripts can destroy entities during Play
+    Scene* scene = sceneProject->scene;
     if (args.contains("entity_id") && args["entity_id"].is_number_unsigned()) {
         Entity entity = args["entity_id"].get<Entity>();
         for (Entity existing : sceneProject->entities) {
-            if (existing == entity) return entity;
+            if (existing == entity && scene->isEntityCreated(entity)) return entity;
         }
     }
     if (args.contains("entity_id") && args["entity_id"].is_number_integer()) {
@@ -719,14 +723,14 @@ Entity resolveEntity(SceneProject* sceneProject, const Json& args) {
         if (raw >= 0) {
             Entity entity = static_cast<Entity>(raw);
             for (Entity existing : sceneProject->entities) {
-                if (existing == entity) return entity;
+                if (existing == entity && scene->isEntityCreated(entity)) return entity;
             }
         }
     }
     if (args.contains("entity_name") && args["entity_name"].is_string()) {
         const std::string name = args["entity_name"].get<std::string>();
         for (Entity entity : sceneProject->entities) {
-            if (sceneProject->scene->getEntityName(entity) == name) {
+            if (scene->isEntityCreated(entity) && scene->getEntityName(entity) == name) {
                 return entity;
             }
         }
@@ -1338,6 +1342,84 @@ bool safeRelativePath(Project* project, const Json& args, const char* key, fs::p
         return false;
     }
     return true;
+}
+
+constexpr const char* kClosedParentScene = "The parent scene is closed, so the change would be lost when it opens. Open it with open_scene first.";
+constexpr const char* kUnsavedScriptEdits = "A script open in the code editor has unsaved edits. Ask the user to save or discard them first.";
+constexpr const char* kProjectChangeBusy = "The editor is already switching projects. Try again once it has loaded.";
+
+// isAnyScenePlaying() is also true while a scene saves or loads
+std::string busyError(Project* project, const std::string& action) {
+    if (!project->isPlaySessionActive()) {
+        for (const SceneProject& sceneProject : project->getScenes()) {
+            if (sceneProject.playState == ScenePlayState::SAVING || sceneProject.playState == ScenePlayState::LOADING) {
+                return "Scene " + sceneProject.name + " is still saving or loading; retry " + action + " once it finishes.";
+            }
+        }
+    }
+    return "Stop play mode before " + action + ".";
+}
+
+// Catalog lists every submesh slot, even unused ones
+bool isUnusedSubmeshProperty(Scene* scene, Entity entity, const std::string& propName) {
+    if (propName.rfind("submeshes[", 0) != 0) return false;
+    const MeshComponent* mesh = scene->findComponent<MeshComponent>(entity);
+    return mesh && std::stoul(propName.substr(10)) >= mesh->numSubmeshes;
+}
+
+// Empty or new directory outside the current project, like the Save Project dialog
+bool prepareNewProjectDirectory(Project* project, const Json& args, fs::path& path, std::string& error) {
+    path = fs::path(args.value("path", "")).lexically_normal();
+    if (!path.has_filename()) path = path.parent_path();
+    if (!path.is_absolute()) {
+        error = "path must be an absolute directory.";
+        return false;
+    }
+    std::error_code ec;
+    if (fs::exists(path, ec) && (!fs::is_directory(path, ec) || !fs::is_empty(path, ec))) {
+        error = "path must be an empty directory or not exist yet: " + path.string();
+        return false;
+    }
+    // Canonical, so a symlinked temp path can't hide inside the project
+    std::error_code pathEc, projectEc;
+    const fs::path target = fs::weakly_canonical(path, pathEc);
+    const fs::path current = fs::weakly_canonical(project->getProjectPath(), projectEc);
+    if (pathEc || projectEc) {
+        error = "Could not resolve " + path.string() + ".";
+        return false;
+    }
+    const fs::path relative = target.lexically_relative(current);
+    if (!relative.empty() && *relative.begin() != "..") {
+        error = "path cannot be inside the current project.";
+        return false;
+    }
+    // saveProjectToPath only creates the last level
+    fs::create_directories(path, ec);
+    if (ec) {
+        error = "Could not create " + path.string() + ": " + ec.message();
+        return false;
+    }
+    return true;
+}
+
+bool hasUnsavedScriptEdits() {
+    CodeEditor* codeEditor = getEditorHost().getCodeEditor();
+    return codeEditor && codeEditor->hasUnsavedChanges();
+}
+
+// Refused where the menus would ask about unsaved work
+bool canSwitchProject(Project* project, std::string& error) {
+    error.clear();
+    if (project->isAnyScenePlaying()) {
+        error = busyError(project, "switching projects");
+    } else if (hasUnsavedScriptEdits()) {
+        error = kUnsavedScriptEdits;
+    } else if (project->hasScenesUnsavedChanges()) {
+        error = "The current project has unsaved scene changes. Save each changed scene with save_scene first, passing path for one that has no file yet.";
+    } else if (project->isTempUnsavedProject()) {
+        error = "The current project is a temporary one in the system temp folder. Keep it by moving it out with save_project and path first.";
+    }
+    return error.empty();
 }
 
 // A source under a script root compiles by living there, not by being referenced.
@@ -2134,7 +2216,10 @@ ActionResult EditorActionExecutor::dispatch(const std::string& name,
     if (name == "select_scene") return selectScene(arguments);
     if (name == "regenerate_mesh_geometry") return regenerateMeshGeometry(arguments);
     if (name == "delete_scene") return deleteScene(arguments);
-    if (name == "save_project") return saveProject();
+    if (name == "save_project") return saveProject(arguments);
+    if (name == "set_project_settings") return setProjectSettings(arguments);
+    if (name == "create_project") return createProject(arguments);
+    if (name == "open_project") return openProject(arguments);
     if (name == "copy_resource") return copyResource(arguments);
     if (name == "update_material_file") return updateMaterialFile(arguments);
     if (name == "set_component_properties") return setComponentProperties(arguments);
@@ -2165,6 +2250,9 @@ ActionResult EditorActionExecutor::getProjectSummary() {
         data["script_dirs"].push_back(scriptDir.generic_string());
     }
     data["cxx_standard"] = project->getCxxStandard();
+    data["canvas"] = {{"width", project->getCanvasWidth()}, {"height", project->getCanvasHeight()}};
+    data["scaling_mode"] = Stream::scalingModeToString(project->getScalingMode());
+    data["window"] = {{"width", project->getWindowWidth()}, {"height", project->getWindowHeight()}};
     data["standalone_bundles"] = Json::array();
     for (const fs::path& bundlePath : project->getStandaloneBundles()) {
         data["standalone_bundles"].push_back(bundlePath.generic_string());
@@ -2240,6 +2328,8 @@ ActionResult EditorActionExecutor::listSceneEntities(const Json& arguments) {
 
     Json entities = Json::array();
     for (Entity entity : sceneProject->entities) {
+        // Scripts can destroy entities during Play
+        if (!sceneProject->scene->isEntityCreated(entity)) continue;
         Json components = Json::array();
         for (ComponentType type : Catalog::findComponents(sceneProject->scene, entity)) {
             components.push_back(Catalog::getComponentName(type, true));
@@ -2298,6 +2388,7 @@ ActionResult EditorActionExecutor::inspectEntity(const Json& arguments) {
         if (includeProperties) {
             Json props = Json::object();
             for (const auto& [propName, prop] : Catalog::findEntityProperties(sceneProject->scene, entity, type)) {
+                if (isUnusedSubmeshProperty(sceneProject->scene, entity, propName)) continue;
                 props[propName] = {{"type", propertyTypeName(prop.type)}, {"value", propertyValueToJson(project, propName, prop)}};
             }
             comp["properties"] = props;
@@ -2336,6 +2427,7 @@ ActionResult EditorActionExecutor::inspectComponent(const Json& arguments) {
 
     Json props = Json::object();
     for (const auto& [propName, prop] : properties) {
+        if (isUnusedSubmeshProperty(sceneProject->scene, entity, propName)) continue;
         props[propName] = {{"type", propertyTypeName(prop.type)}, {"value", propertyValueToJson(project, propName, prop)}};
     }
 
@@ -2956,6 +3048,14 @@ ActionResult EditorActionExecutor::createScene(const Json& arguments) {
         return failResult("Unsupported scene type. Use 3d, 2d, or ui.");
     }
 
+    if (project->isAnyScenePlaying()) {
+        return failResult(busyError(project, "creating a scene"));
+    }
+    // createNewScene would ask about them in a dialog
+    if (project->hasSceneUnsavedChanges(project->getSelectedSceneId())) {
+        return failResult("The selected scene or one of its child scenes has unsaved changes. Save it first with save_scene, passing path if it has no file yet.");
+    }
+
     const std::string requestedName = arguments.value("name", "Scene");
     project->createNewScene(requestedName, type);
     const uint32_t sceneId = project->getSelectedSceneId();
@@ -2977,10 +3077,37 @@ ActionResult EditorActionExecutor::renameScene(const Json& arguments) {
 
 ActionResult EditorActionExecutor::saveScene(const Json& arguments) {
     uint32_t sceneId = resolveSceneId(project, arguments);
-    if (!project->getScene(sceneId)) return failResult("Scene not found.");
+    SceneProject* sceneProject = project->getScene(sceneId);
+    if (!sceneProject) return failResult("Scene not found.");
+    if (sceneProject->playState != ScenePlayState::STOPPED) {
+        return failResult(busyError(project, "saving the scene"));
+    }
+
+    if (arguments.contains("path") && arguments["path"].is_string()) {
+        std::string error;
+        fs::path rel;
+        if (!safeRelativePath(project, arguments, "path", rel, error)) return failResult(error);
+        if (rel.extension() != ".scene") return failResult("path must be a .scene file.");
+        if (!sceneProject->filepath.empty() && sceneProject->filepath.lexically_normal() != rel) {
+            return failResult("The scene is already saved as " + sceneProject->filepath.generic_string() + "; save it without path.");
+        }
+        if (sceneProject->filepath.empty()) {
+            const fs::path fullPath = project->getProjectPath() / rel;
+            if (fs::exists(fullPath)) {
+                return failResult("A file already exists at " + rel.generic_string() + ".");
+            }
+            std::error_code ec;
+            fs::create_directories(fullPath.parent_path(), ec);
+            // saveScene writes it there, like the save dialog
+            sceneProject->filepath = rel;
+        }
+    }
 
     project->saveScene(sceneId);
-    return okResult("Requested scene save.", Json{{"scene_id", sceneId}});
+    if (sceneProject->filepath.empty()) {
+        return warningResult("The scene has no file yet, so the editor asked the user where to save it. Pass path to save it directly.");
+    }
+    return okResult("Saving scene.", Json{{"scene_id", sceneId}, {"path", sceneProject->filepath.generic_string()}});
 }
 
 ActionResult EditorActionExecutor::saveAllScenes() {
@@ -3107,6 +3234,7 @@ ActionResult EditorActionExecutor::addChildScene(const Json& arguments) {
     uint32_t sceneId = resolveSceneId(project, arguments);
     const uint32_t childSceneId = static_cast<uint32_t>(arguments.value("child_scene_id", 0));
     if (!project->getScene(sceneId) || !project->getScene(childSceneId)) return failResult("Parent or child scene not found.");
+    if (!project->getScene(sceneId)->scene) return failResult(kClosedParentScene);
     if (sceneId == childSceneId) return failResult("A scene cannot be its own child.");
 
     const bool startActive = arguments.value("start_active", true);
@@ -3125,6 +3253,7 @@ ActionResult EditorActionExecutor::removeChildScene(const Json& arguments) {
     uint32_t sceneId = resolveSceneId(project, arguments);
     const uint32_t childSceneId = static_cast<uint32_t>(arguments.value("child_scene_id", 0));
     if (!project->getScene(sceneId)) return failResult("Scene not found.");
+    if (!project->getScene(sceneId)->scene) return failResult(kClosedParentScene);
     if (!project->hasChildScene(sceneId, childSceneId)) return failResult("Child scene is not attached to this scene.");
 
     CommandHandle::get(sceneId)->addCommandNoMerge(new RemoveChildSceneCmd(project, sceneId, childSceneId));
@@ -3135,6 +3264,7 @@ ActionResult EditorActionExecutor::setChildSceneStartActive(const Json& argument
     uint32_t sceneId = resolveSceneId(project, arguments);
     const uint32_t childSceneId = static_cast<uint32_t>(arguments.value("child_scene_id", 0));
     if (!project->getScene(sceneId)) return failResult("Scene not found.");
+    if (!project->getScene(sceneId)->scene) return failResult(kClosedParentScene);
     if (!project->hasChildScene(sceneId, childSceneId)) return failResult("Child scene is not attached to this scene.");
 
     CommandHandle::get(sceneId)->addCommandNoMerge(
@@ -5272,11 +5402,104 @@ ActionResult EditorActionExecutor::deleteScene(const Json& arguments) {
                          {"selected_scene_id", project->getSelectedSceneId()}});
 }
 
-ActionResult EditorActionExecutor::saveProject() {
+ActionResult EditorActionExecutor::saveProject(const Json& arguments) {
+    if (arguments.contains("path") && arguments["path"].is_string()) {
+        if (!project->isTempProject()) {
+            return failResult("The project already lives at " + project->getProjectPath().string() + "; save it without path.");
+        }
+        if (project->isAnyScenePlaying()) {
+            return failResult(busyError(project, "moving the project"));
+        }
+        // Open buffers would keep pointing at the temp folder
+        if (hasUnsavedScriptEdits()) {
+            return failResult(kUnsavedScriptEdits);
+        }
+        std::string error;
+        fs::path path;
+        if (!prepareNewProjectDirectory(project, arguments, path, error)) return failResult(error);
+
+        const std::string name = optionalString(arguments, "name");
+        if (!name.empty()) {
+            project->setName(name);
+        }
+        if (!project->saveProjectToPath(path)) {
+            return failResult("Failed to save the project to " + path.string() + ".");
+        }
+        return okResult("Moved the project out of the temp folder.", Json{{"path", path.string()}});
+    }
+
     if (!project->saveProject(false)) {
         return failResult("Failed to save project.");
     }
     return okResult("Saved project.", Json{{"path", project->getProjectPath().string()}});
+}
+
+ActionResult EditorActionExecutor::setProjectSettings(const Json& arguments) {
+    if (arguments.contains("scaling_mode") && arguments["scaling_mode"].is_string()) {
+        const std::string mode = lower(arguments["scaling_mode"].get<std::string>());
+        const Scaling scaling = Stream::stringToScalingMode(mode);
+        if (Stream::scalingModeToString(scaling) != mode) {
+            return failResult("Unknown scaling_mode: " + mode + ". Use fitwidth, fitheight, letterbox, crop, stretch, or native.");
+        }
+        project->setScalingMode(scaling);
+    }
+    if (arguments.contains("canvas_width") || arguments.contains("canvas_height")) {
+        project->setCanvasSize(arguments.value("canvas_width", project->getCanvasWidth()),
+                               arguments.value("canvas_height", project->getCanvasHeight()));
+    }
+    if (arguments.contains("window_width") || arguments.contains("window_height")) {
+        project->setWindowSize(arguments.value("window_width", project->getWindowWidth()),
+                               arguments.value("window_height", project->getWindowHeight()));
+    }
+    if (!project->saveProjectFile()) {
+        return failResult("Failed to save the project settings.");
+    }
+
+    return okResult("Changed project settings.", Json{
+        {"canvas", {{"width", project->getCanvasWidth()}, {"height", project->getCanvasHeight()}}},
+        {"scaling_mode", Stream::scalingModeToString(project->getScalingMode())},
+        {"window", {{"width", project->getWindowWidth()}, {"height", project->getWindowHeight()}}}});
+}
+
+ActionResult EditorActionExecutor::createProject(const Json& arguments) {
+    std::string error;
+    fs::path path;
+    if (!canSwitchProject(project, error) || !prepareNewProjectDirectory(project, arguments, path, error)) {
+        return failResult(error);
+    }
+    std::string name = optionalString(arguments, "name");
+    if (name.empty()) {
+        name = path.filename().string();
+    }
+
+    Project* target = project;
+    const bool queued = getEditorHost().requestProjectChange([target, path, name]() {
+        // A unique temp name keeps the current temp project's files
+        if (target->createTempProject("DoriaxProject" + std::to_string(std::random_device{}()), true)) {
+            target->setName(name);
+            target->saveProjectToPath(path);
+        }
+    });
+    if (!queued) {
+        return failResult(kProjectChangeBusy);
+    }
+    return okResult("Creating the project, which opens after this call. Save its scene with save_scene and path.",
+                    Json{{"path", path.string()}, {"name", name}});
+}
+
+ActionResult EditorActionExecutor::openProject(const Json& arguments) {
+    std::string error;
+    if (!canSwitchProject(project, error)) return failResult(error);
+    const fs::path path = fs::path(arguments.value("path", "")).lexically_normal();
+    if (!path.is_absolute() || !fs::exists(path / "project.yaml")) {
+        return failResult("path must be an absolute project directory holding project.yaml.");
+    }
+
+    Project* target = project;
+    if (!getEditorHost().requestProjectChange([target, path]() { target->loadProject(path); })) {
+        return failResult(kProjectChangeBusy);
+    }
+    return okResult("Opening the project, which loads after this call.", Json{{"path", path.string()}});
 }
 
 ActionResult EditorActionExecutor::copyResource(const Json& arguments) {

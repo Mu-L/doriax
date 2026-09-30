@@ -120,7 +120,10 @@ private:
     ActionResult selectScene(const Json& arguments);
     ActionResult regenerateMeshGeometry(const Json& arguments);
     ActionResult deleteScene(const Json& arguments);
-    ActionResult saveProject();
+    ActionResult saveProject(const Json& arguments);
+    ActionResult setProjectSettings(const Json& arguments);
+    ActionResult createProject(const Json& arguments);
+    ActionResult openProject(const Json& arguments);
     ActionResult copyResource(const Json& arguments);
     ActionResult updateMaterialFile(const Json& arguments);
     ActionResult setComponentProperties(const Json& arguments);

@@ -154,6 +154,8 @@ struct ToolDefinition {
     std::string description;
     Json parameters = Json::object();
     bool readOnly = true;
+    // Kept from the editor chat, since a project switch would end its turn
+    bool mcpOnly = false;
 };
 
 struct ProviderRequest {

@@ -54,6 +54,13 @@ void EditorHost::saveAllCodeEditors() {
 void EditorHost::requestScenePlayFocus(uint32_t) {
 }
 
+bool EditorHost::requestProjectChange(std::function<void()> change) {
+    if (change) {
+        change();
+    }
+    return true;
+}
+
 void EditorHost::reportLoadingProgress(const std::string&) {
 }
 

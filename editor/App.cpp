@@ -1964,10 +1964,11 @@ void editor::App::loadStartupProject() {
     requestRedraw();
 }
 
-void editor::App::requestProjectChange(std::function<void()> change) {
-    if (projectLoading || pendingProjectChange) return;
+bool editor::App::requestProjectChange(std::function<void()> change) {
+    if (projectLoading || pendingProjectChange) return false;
     pendingProjectChange = std::move(change);
     requestRedraw();
+    return true;
 }
 
 void editor::App::processProjectChange() {

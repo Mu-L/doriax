@@ -97,9 +97,6 @@ namespace doriax::editor {
         static std::string progressbarTypeToString(ProgressbarType type);
         static ProgressbarType stringToProgressbarType(const std::string& str);
 
-        static std::string scalingModeToString(Scaling mode);
-        static Scaling stringToScalingMode(const std::string& str);
-
         static std::string textureStrategyToString(TextureStrategy strategy);
         static TextureStrategy stringToTextureStrategy(const std::string& str);
 
@@ -209,6 +206,8 @@ namespace doriax::editor {
         static EaseType stringToEaseType(const std::string& str);
         static std::string textureFilterToString(TextureFilter filter);
         static TextureFilter stringToTextureFilter(const std::string& str);
+        static std::string scalingModeToString(Scaling mode);
+        static Scaling stringToScalingMode(const std::string& str);
 
         static std::string textureWrapToString(TextureWrap wrap);
         static TextureWrap stringToTextureWrap(const std::string& str);

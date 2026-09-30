@@ -196,7 +196,7 @@ namespace doriax::editor{
         void saveAllFunc(std::function<void(bool)> callback = nullptr);
         void saveAllAndProject(std::function<void()> onSuccess);
         void openProjectFunc();
-        void requestProjectChange(std::function<void()> change);
+        bool requestProjectChange(std::function<void()> change) override;
         bool canEditSelection(bool duplicate);
         void deleteSelection();
         void duplicateSelection();

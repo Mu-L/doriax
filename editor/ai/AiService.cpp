@@ -751,7 +751,9 @@ ProviderRequest AiService::buildRequestSnapshotLocked() const {
     request.apiKey = SecretStore::getApiKey(accountKey(settings));
     request.messages = messages;
     compactCompletedToolHistory(request.messages);
-    request.tools = EditorActionRegistry::tools();
+    for (const ToolDefinition& tool : EditorActionRegistry::tools()) {
+        if (!tool.mcpOnly) request.tools.push_back(tool);
+    }
     request.systemPrompt = buildSystemPrompt();
     return request;
 }
@@ -954,6 +956,9 @@ void AiService::addToolCallProposalLocked(const ToolCall& call) {
     try {
         proposal.description = EditorActionRegistry::describe(call.name, call.arguments);
         validation = EditorActionRegistry::validate(call.name, call.arguments);
+        if (validation.ok && EditorActionRegistry::getTool(call.name).mcpOnly) {
+            validation = {false, call.name + " is only available to MCP clients."};
+        }
     } catch (const std::exception& e) {
         if (proposal.description.empty()) {
             proposal.description = call.name;

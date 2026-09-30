@@ -2157,6 +2157,7 @@ void editor::Structure::rebuildEntityTree(SceneProject* sceneProject, TreeNode& 
 
             // non-hierarchical entities
             for (auto& entity : childScene->entities) {
+                if (!childScene->scene->isEntityCreated(entity)) continue;
                 Signature signature = childScene->scene->getSignature(entity);
                 if (!signature.test(childScene->scene->getComponentId<Transform>())) {
                     TreeNode enode;
@@ -2221,6 +2222,8 @@ void editor::Structure::rebuildEntityTree(SceneProject* sceneProject, TreeNode& 
     flatEntities.insert(flatEntities.end(), playCreated.begin(), playCreated.end());
 
     for (auto& entity : flatEntities) {
+        // Scripts can destroy entities during Play
+        if (!sceneProject->scene->isEntityCreated(entity)) continue;
         Signature signature = sceneProject->scene->getSignature(entity);
 
         if (!signature.test(sceneProject->scene->getComponentId<Transform>())){

@@ -32,6 +32,8 @@ namespace doriax::editor {
         virtual void flushSceneMaterialWrites(uint32_t sceneId);
         virtual void saveAllCodeEditors();
         virtual void requestScenePlayFocus(uint32_t sceneId);
+        // Runs the change between frames; false if another one is pending
+        virtual bool requestProjectChange(std::function<void()> change);
 
         // Refresh the loading UI and native events at project loading checkpoints.
         virtual void reportLoadingProgress(const std::string& status = {});
