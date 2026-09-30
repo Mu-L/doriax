@@ -1737,7 +1737,8 @@ void editor::ProjectUtils::loadLuaScriptProperties(ScriptEntry& entry, const std
     lua_State* L = LuaBinding::getLuaState();
     if (!L) return;
 
-    if (luaL_dofile(L, luaPath.c_str()) != LUA_OK) {
+    // One result, even from a script that returns nothing
+    if (luaL_loadfile(L, luaPath.c_str()) != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
         Out::error("Failed to load Lua script \"%s\": %s", luaPath.c_str(), lua_tostring(L, -1));
         lua_pop(L, 1);
         return;
@@ -1755,7 +1756,7 @@ void editor::ProjectUtils::loadLuaScriptPropertiesFromString(ScriptEntry& entry,
     lua_State* L = LuaBinding::getLuaState();
     if (!L) return;
 
-    if (luaL_dostring(L, scriptContent.c_str()) != LUA_OK) {
+    if (luaL_loadstring(L, scriptContent.c_str()) != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
         // Silently ignore parse errors for in-memory content (code may be mid-edit)
         lua_pop(L, 1);
         return;
@@ -1770,12 +1771,11 @@ void editor::ProjectUtils::loadLuaScriptPropertiesFromString(ScriptEntry& entry,
 }
 
 static void parseLuaPropertiesTable(lua_State* L, ScriptEntry& entry) {
+    entry.properties.clear();
 
     lua_getfield(L, -1, "properties");  // Stack: script_table, properties_table
 
     if (lua_istable(L, -1)) {
-        entry.properties.clear();
-
         lua_pushnil(L);  // Stack: script_table, properties_table, nil
         while (lua_next(L, -2) != 0) {  // Stack: script_table, properties_table, key, property_table
             if (lua_istable(L, -1)) {

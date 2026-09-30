@@ -663,8 +663,9 @@ void editor::CodeEditor::checkExternalScriptChanges() {
 
         auto it = watchedScriptFiles.find(relPath);
         if (it == watchedScriptFiles.end()) {
-            // First sighting, record the baseline without refreshing
+            // First sighting, the scene may hold stale properties
             watchedScriptFiles[relPath] = currentWriteTime;
+            updateScriptPropertiesForPath(relPath);
             continue;
         }
         if (it->second == currentWriteTime)
@@ -780,8 +781,9 @@ void editor::CodeEditor::updateScriptPropertiesForPath(const fs::path& relFilepa
                 continue;
 
             for (const auto& scriptEntry : scriptComponent->scripts) {
+                // Lua entries are stored relative to the Lua root
                 bool matchesFile = (scriptEntry.type == ScriptType::CPP) ? (scriptEntry.headerPath == relPathStr)
-                                                                        : (scriptEntry.path == relPathStr);
+                                                                        : (project->resolveLuaPath(scriptEntry.path) == fullPath.lexically_normal());
                 if (!matchesFile)
                     continue;
 
